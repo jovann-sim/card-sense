@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CardSense — System Architecture</title>
+<style>
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62.5..125,400..700&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;600;700&display=swap");
+
+:root{
+  --porcelain:#eff0ec; --paper:#fafbf8; --graphite:#15171b; --slate:#5f646b;
+  --slate-soft:#8b9097; --hairline:#dcded6; --hairline-strong:#c4c7bd;
+  --brass:#9c7a33; --brass-deep:#6f5620; --brass-tint:#e7dabb; --brass-wash:#f5efe0;
+  --verdigris:#1e5a50; --verdigris-tint:#cbdcd7;
+  --ember:#9c3a2a; --ember-wash:#f6e7e3;
+  --display:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+*{margin:0;box-sizing:border-box}
+body{background:var(--porcelain);color:var(--graphite);font-family:var(--body);
+  font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.wrap{max-width:52rem;margin:0 auto;padding:0 1.75rem 6rem}
+
+/* ---- cover ---- */
+.cover{padding:4.5rem 0 3rem;border-bottom:2px solid var(--graphite);margin-bottom:3rem}
+.mark{font-family:var(--display);font-variation-settings:"wdth" 118;font-weight:700;
+  font-size:.8125rem;letter-spacing:.18em;text-transform:uppercase}
+.mark span{color:var(--brass)}
+h1{font-family:var(--display);font-variation-settings:"wdth" 110;font-weight:700;
+  font-size:clamp(2.2rem,6vw,3.4rem);line-height:1.02;letter-spacing:-.03em;margin:1.25rem 0 .875rem}
+.cover__sub{font-size:1.05rem;color:var(--slate);max-width:40ch}
+.cover__meta{margin-top:2rem;display:flex;flex-wrap:wrap;gap:.4rem 2rem;
+  font-family:var(--mono);font-size:.6875rem;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--slate-soft)}
+
+/* ---- structure ---- */
+h2{font-family:var(--display);font-variation-settings:"wdth" 106;font-weight:700;
+  font-size:1.6rem;letter-spacing:-.02em;line-height:1.2;margin:3.25rem 0 .5rem;
+  padding-top:1.5rem;border-top:1px solid var(--hairline-strong)}
+h2 .n{font-family:var(--mono);font-size:.75rem;font-weight:400;color:var(--brass);
+  letter-spacing:.1em;display:block;margin-bottom:.5rem}
+h3{font-family:var(--display);font-variation-settings:"wdth" 104;font-weight:650;
+  font-size:1.1rem;letter-spacing:-.01em;margin:2rem 0 .5rem}
+h4{font-family:var(--mono);font-size:.6875rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--slate);margin:1.5rem 0 .5rem}
+p{margin:.75rem 0;max-width:66ch}
+ul,ol{margin:.75rem 0 .75rem 1.1rem;max-width:66ch}
+li{margin:.35rem 0}
+strong{font-weight:700}
+em{font-style:italic}
+a{color:var(--brass-deep)}
+code{font-family:var(--mono);font-size:.85em;background:var(--paper);
+  border:1px solid var(--hairline);border-radius:2px;padding:.05em .32em}
+
+/* ---- toc ---- */
+.toc{background:var(--paper);border:1px solid var(--hairline-strong);
+  border-radius:4px;padding:1.5rem 1.75rem;margin:2.5rem 0}
+.toc h4{margin-top:0}
+.toc ol{columns:2;column-gap:2.5rem;margin-left:1rem;font-size:.875rem}
+.toc a{text-decoration:none;color:var(--graphite)}
+.toc a:hover{color:var(--brass-deep);text-decoration:underline}
+@media(max-width:34rem){.toc ol{columns:1}}
+
+/* ---- callouts ---- */
+.principle{background:var(--paper);border:1px solid var(--hairline-strong);
+  border-left:3px solid var(--brass);border-radius:4px;padding:1.15rem 1.35rem;margin:1.15rem 0}
+.principle p{margin:.4rem 0 0}
+.principle__t{font-family:var(--display);font-variation-settings:"wdth" 104;
+  font-weight:650;font-size:1.02rem}
+.note{background:var(--brass-wash);border:1px solid var(--brass-tint);
+  border-left:3px solid var(--brass);border-radius:4px;padding:1.1rem 1.35rem;margin:1.5rem 0}
+.note__l{font-family:var(--mono);font-size:.625rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--brass-deep);margin-bottom:.35rem}
+.warn{background:var(--ember-wash);border:1px solid var(--ember);
+  border-left:3px solid var(--ember);border-radius:4px;padding:1.1rem 1.35rem;margin:1.5rem 0}
+.warn .note__l{color:var(--ember)}
+.internal{background:var(--paper);border:2px dashed var(--slate-soft);
+  border-radius:4px;padding:1.1rem 1.35rem;margin:1.5rem 0}
+.internal .note__l{color:var(--slate)}
+
+/* ---- diagram ---- */
+pre.dia{font-family:var(--mono);font-size:.68rem;line-height:1.45;background:var(--paper);
+  border:1px solid var(--hairline-strong);border-radius:4px;padding:1.25rem;
+  overflow-x:auto;margin:1.5rem 0;white-space:pre}
+
+/* ---- tables ---- */
+.tw{overflow-x:auto;margin:1.25rem 0;border:1px solid var(--hairline-strong);border-radius:4px}
+table{border-collapse:collapse;width:100%;font-size:.85rem;background:var(--paper)}
+th{text-align:left;font-family:var(--mono);font-size:.625rem;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--slate);padding:.7rem .85rem;
+  border-bottom:1px solid var(--hairline-strong);white-space:nowrap;vertical-align:bottom}
+td{padding:.7rem .85rem;border-bottom:1px solid var(--hairline);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.mono,th.mono{font-family:var(--mono);font-size:.78rem}
+.yes{color:var(--verdigris);font-weight:700}
+.no{color:var(--ember);font-weight:700}
+
+/* ---- agent card ---- */
+.agent{background:var(--paper);border:1px solid var(--hairline-strong);
+  border-radius:4px;padding:1.4rem 1.6rem;margin:1.5rem 0}
+.agent__h{display:flex;flex-wrap:wrap;align-items:baseline;gap:.75rem;
+  padding-bottom:.75rem;border-bottom:1px solid var(--hairline);margin-bottom:.9rem}
+.agent__n{font-family:var(--display);font-variation-settings:"wdth" 106;
+  font-weight:700;font-size:1.2rem;letter-spacing:-.015em}
+.badge{font-family:var(--mono);font-size:.5625rem;letter-spacing:.12em;
+  text-transform:uppercase;padding:.18rem .45rem;border-radius:2px;white-space:nowrap}
+.badge--llm{background:var(--brass-wash);color:var(--brass-deep);border:1px solid var(--brass-tint)}
+.badge--det{background:var(--verdigris-tint);color:var(--verdigris);border:1px solid var(--verdigris)}
+.io{display:grid;grid-template-columns:5.5rem 1fr;gap:.3rem .9rem;
+  font-size:.8rem;margin:.9rem 0}
+.io dt{font-family:var(--mono);font-size:.625rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--slate-soft);padding-top:.15rem}
+.io dd{font-family:var(--mono);font-size:.78rem;color:var(--slate)}
+
+/* ---- phases ---- */
+.phase{border-left:2px solid var(--hairline-strong);padding:0 0 1.6rem 1.4rem;
+  position:relative;margin-left:.4rem}
+.phase:last-child{border-left-color:transparent}
+.phase::before{content:"";position:absolute;left:-5px;top:.45rem;width:8px;height:8px;
+  border-radius:50%;background:var(--brass)}
+.phase__d{font-family:var(--mono);font-size:.625rem;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--brass-deep)}
+.phase__t{font-family:var(--display);font-variation-settings:"wdth" 104;
+  font-weight:650;font-size:1.08rem;margin:.15rem 0 .1rem}
+.phase__o{font-family:var(--mono);font-size:.7rem;color:var(--slate-soft);margin-bottom:.5rem}
+.ms{display:inline-block;margin-top:.6rem;background:var(--verdigris-tint);
+  color:var(--verdigris);border:1px solid var(--verdigris);border-radius:2px;
+  padding:.25rem .55rem;font-size:.78rem;font-weight:600}
+
+.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,14rem),1fr));gap:1rem;margin:1.5rem 0}
+.status__c{border:1px solid var(--hairline-strong);border-radius:4px;padding:1.1rem;background:var(--paper)}
+.status__c[data-s="built"]{border-color:var(--verdigris)}
+.status__c[data-s="partial"]{border-color:var(--brass)}
+.status__c[data-s="none"]{border-color:var(--ember)}
+.status__l{font-family:var(--mono);font-size:.625rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:.5rem}
+.status__c[data-s="built"] .status__l{color:var(--verdigris)}
+.status__c[data-s="partial"] .status__l{color:var(--brass-deep)}
+.status__c[data-s="none"] .status__l{color:var(--ember)}
+.status__c ul{margin:0 0 0 1rem;font-size:.83rem}
+
+footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-strong);
+  font-family:var(--mono);font-size:.6875rem;color:var(--slate-soft)}
+
+/* ---- dark ---- */
+@media(prefers-color-scheme:dark){
+  :root{--porcelain:#14161a;--paper:#1b1e23;--graphite:#e8e9e4;--slate:#a3a8ae;
+    --slate-soft:#7c8188;--hairline:#2a2e34;--hairline-strong:#3a3f46;
+    --brass:#c9a253;--brass-deep:#dcbb74;--brass-tint:#4a3c1c;--brass-wash:#25211a;
+    --verdigris:#6db3a4;--verdigris-tint:#1d332f;
+    --ember:#d97a66;--ember-wash:#2b1d1a;}
+}
+:root[data-theme="dark"]{--porcelain:#14161a;--paper:#1b1e23;--graphite:#e8e9e4;
+  --slate:#a3a8ae;--slate-soft:#7c8188;--hairline:#2a2e34;--hairline-strong:#3a3f46;
+  --brass:#c9a253;--brass-deep:#dcbb74;--brass-tint:#4a3c1c;--brass-wash:#25211a;
+  --verdigris:#6db3a4;--verdigris-tint:#1d332f;--ember:#d97a66;--ember-wash:#2b1d1a;}
+:root[data-theme="light"]{--porcelain:#eff0ec;--paper:#fafbf8;--graphite:#15171b;
+  --slate:#5f646b;--slate-soft:#8b9097;--hairline:#dcded6;--hairline-strong:#c4c7bd;
+  --brass:#9c7a33;--brass-deep:#6f5620;--brass-tint:#e7dabb;--brass-wash:#f5efe0;
+  --verdigris:#1e5a50;--verdigris-tint:#cbdcd7;--ember:#9c3a2a;--ember-wash:#f6e7e3;}
+
+/* ---- print ---- */
+@media print{
+  :root{--porcelain:#fff;--paper:#fff;--graphite:#000;--slate:#333;--slate-soft:#666;
+    --hairline:#ccc;--hairline-strong:#999;}
+  body{font-size:10.5pt}
+  .wrap{max-width:none;padding:0}
+  .toc{break-inside:avoid}
+  h2{break-after:avoid;break-inside:avoid;page-break-after:avoid}
+  h3,h4{break-after:avoid}
+  .agent,.principle,.note,.warn,.phase,.tw,pre.dia{break-inside:avoid}
+  .cover{padding-top:0}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="cover">
+  <p class="mark">Card<span>Sense</span></p>
+  <h1>System Architecture</h1>
+  <p class="cover__sub">An autonomous multi-agent system that finds the money your spending left on the table — and tells you which card to reach for next.</p>
+  <div class="cover__meta">
+    <span>All Things Agentic Hackathon</span>
+    <span>Taskmaster track</span>
+    <span>Team of two</span>
+    <span>August 2026</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#s1">What CardSense is</a></li>
+    <li><a href="#s2">Architectural principles</a></li>
+    <li><a href="#s3">System at a glance</a></li>
+    <li><a href="#s4">The five agents</a></li>
+    <li><a href="#s5">Data architecture</a></li>
+    <li><a href="#s6">Frontend architecture</a></li>
+    <li><a href="#s7">Chrome extension</a></li>
+    <li><a href="#s8">Deployment topology</a></li>
+    <li><a href="#s9">Security &amp; privacy</a></li>
+    <li><a href="#s10">How the system degrades</a></li>
+    <li><a href="#s11">Tooling against the criteria</a></li>
+    <li><a href="#s12">Implementation status</a></li>
+    <li><a href="#s13">Known limitations</a></li>
+    <li><a href="#s14">Action plan</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================= 1 -->
+<h2 id="s1"><span class="n">01</span>What CardSense is</h2>
+
+<p>CardSense reads a user&rsquo;s spending, matches it against the reward rules of the cards they actually hold, and tells them which card to use and <strong>when</strong>. It runs on its own schedule and pushes conclusions. The user is never required to ask it anything.</p>
+
+<p>The product exists because credit card reward terms are deliberately hard to hold in your head: rates vary by merchant category, most bonus rates are capped, caps reset on cycles that differ per card, and the value of a point depends on how you redeem it. A person optimising by hand would need to re-derive the answer at every checkout. Nobody does. The money quietly goes to the wrong card.</p>
+
+<h4>Explicit non-goals</h4>
+<ul>
+  <li><strong>Not a chatbot.</strong> There is no conversational surface in the primary flow. The system reports; it does not wait to be asked.</li>
+  <li><strong>Not transactional.</strong> CardSense never moves money, never autofills a payment form, and never stores a card number. This is an architectural boundary, not an unimplemented feature — it removes PCI scope from the system entirely.</li>
+  <li><strong>Not a comparison site.</strong> Where cards the user does not hold appear, they are priced against that user&rsquo;s real spending, net of annual fee, and surfaced by an agent rather than browsed.</li>
+</ul>
+
+<h4>What the user contributes</h4>
+<p>Three declarations, and nothing else: the accounts they spend from, the terms documents for cards they hold, and a goal. Optionally, spending they know is coming — a trip, a large purchase — which the system cannot infer from history.</p>
+
+<!-- ============================================================= 2 -->
+<h2 id="s2"><span class="n">02</span>Architectural principles</h2>
+
+<p>Six decisions that everything else follows from. They are the answer to <em>why is it built this way</em>.</p>
+
+<div class="principle">
+  <p class="principle__t">1 &middot; Agents coordinate through shared state, never direct calls</p>
+  <p>Each agent reads the collections it needs and writes only its own. No agent invokes another. The consequences are what matter: a failing agent <em>degrades</em> the output instead of breaking a chain; two developers can own different agents without coupling their work; and every run is independently replayable and auditable after the fact.</p>
+</div>
+
+<div class="principle">
+  <p class="principle__t">2 &middot; The language model never computes a number that appears as money</p>
+  <p>Gemini reads documents and writes prose. Deterministic code does arithmetic. This is non-negotiable in a product whose core accountability screen compares <em>predicted</em> against <em>actually earned</em> — a hallucinated forecast would be caught by our own reporting. It also means every figure is reproducible from the same inputs, which is the difference between a financial tool and a demo.</p>
+</div>
+
+<div class="principle">
+  <p class="principle__t">3 &middot; One read model</p>
+  <p>The interface reads a single denormalised document rather than joining eight collections. A projection step is the only component that knows the shape the UI expects, which leaves the agents free to evolve their own schemas without touching a line of frontend code.</p>
+</div>
+
+<div class="principle">
+  <p class="principle__t">4 &middot; Degradation is visible and actionable, never silent</p>
+  <p>When a terms document fails to parse, that card is excluded from every comparison, the interface says so on the card itself, and it offers the action that fixes it. A financial tool that quietly guesses is worse than one that admits what it could not read.</p>
+</div>
+
+<div class="principle">
+  <p class="principle__t">5 &middot; The advisory layer is held to account</p>
+  <p>Every recommendation is stored with the value it predicted. Once the period closes, actual earnings are compared against that prediction and the gap is displayed with its reason. The system reports when it was wrong, and adjusts its own thresholds in response.</p>
+</div>
+
+<div class="principle">
+  <p class="principle__t">6 &middot; Provenance is a feature, not a debug view</p>
+  <p>Every reward rate traces to a source document, a location within it, the date it was read, and the date it will next be rechecked. Every recommendation carries the chain of agents that produced it, with the figures each one used.</p>
+</div>
+
+<!-- ============================================================= 3 -->
+<h2 id="s3"><span class="n">03</span>System at a glance</h2>
+
+<pre class="dia">   ┌─────────────┐   ┌──────────────────┐   ┌─────────────────┐
+   │ Plaid       │   │ Issuer terms     │   │ User-declared   │
+   │ (sandbox)   │   │ PDFs / web pages │   │ goal + plans    │
+   └──────┬──────┘   └────────┬─────────┘   └────────┬────────┘
+          │                   │                      │
+          ▼                   ▼                      │
+   ┌────────────┐    ┌──────────────────┐            │
+   │ INGESTION  │    │ CARD INTELLIGENCE│            │
+   │ determinstc│    │ Gemini · document│            │
+   └─────┬──────┘    └────────┬─────────┘            │
+         │                    │                      │
+         │   ┌──────────┐     │                      │
+         └──▶│ FORECAST │◀────┼──────────────────────┘
+             │determinstc     │
+             └────┬─────┘     │
+                  ▼           ▼
+        ┌─────────────────────────────┐
+        │ SIMULATION &amp; STRATEGY       │  ◀── every money figure
+        │ deterministic optimiser     │      originates here, and
+        └──────────────┬──────────────┘      only here
+                       ▼
+             ┌───────────────────┐
+             │ ADVISORY          │  Gemini · language + reasoning trace
+             └─────────┬─────────┘
+                       ▼
+             ┌───────────────────┐
+             │ PROJECTION        │  composes the read model
+             └─────────┬─────────┘
+                       ▼
+            snapshots/current  ─────▶  Next.js dashboard (7 routes)
+                               ─────▶  Chrome extension popup
+
+   Every arrow above is a Firestore write followed by a Firestore read.
+   No agent holds a reference to another agent.</pre>
+
+<p>Forecast and Card Intelligence have no dependency on one another and run concurrently. Under the Agent Development Kit this composes as a sequential pipeline with a parallel stage in the middle:</p>
+
+<pre class="dia">SequentialAgent
+  ├── Ingestion
+  ├── ParallelAgent
+  │     ├── Forecast
+  │     └── Card Intelligence
+  ├── Simulation &amp; Strategy
+  ├── Advisory
+  └── Projection</pre>
+
+<!-- ============================================================= 4 -->
+<h2 id="s4"><span class="n">04</span>The five agents</h2>
+
+<p>Two of the five are driven by Gemini. Three are deliberately not. Choosing correctly between them is the single most consequential decision in this architecture.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Agent</th><th>Responsibility</th><th>Gemini</th><th class="mono">Writes</th></tr></thead>
+<tbody>
+<tr><td><strong>Ingestion</strong></td><td>Pull and normalise transactions</td><td class="no">No</td><td class="mono">transactions</td></tr>
+<tr><td><strong>Card Intelligence</strong></td><td>Extract reward rules from terms documents</td><td class="yes">Yes</td><td class="mono">card_rules</td></tr>
+<tr><td><strong>Forecast</strong></td><td>Project near-term spending and dated events</td><td>Partial</td><td class="mono">forecasts</td></tr>
+<tr><td><strong>Simulation &amp; Strategy</strong></td><td>Price every option, find the gap</td><td class="no">No</td><td class="mono">strategy_runs</td></tr>
+<tr><td><strong>Advisory</strong></td><td>Convert findings into recommendations</td><td class="yes">Yes</td><td class="mono">advice</td></tr>
+</tbody>
+</table></div>
+
+<!-- agent 1 -->
+<div class="agent">
+  <div class="agent__h">
+    <span class="agent__n">1 &middot; Ingestion</span>
+    <span class="badge badge--det">Deterministic</span>
+  </div>
+  <p>Connects to Plaid in sandbox mode and pulls transactions incrementally, normalising them into a category taxonomy the rest of the system can reason about.</p>
+  <dl class="io">
+    <dt>Reads</dt><dd>Plaid /transactions/sync · mcc_map</dd>
+    <dt>Writes</dt><dd>transactions · agent_runs</dd>
+  </dl>
+  <h4>How it works</h4>
+  <ul>
+    <li>Uses Plaid&rsquo;s <code>/transactions/sync</code> endpoint rather than a date-range fetch. It returns added, modified and removed records against a cursor, which makes ingestion incremental and idempotent — re-running it never double-counts.</li>
+    <li>The cursor is stored per linked item, so each run only fetches what changed.</li>
+    <li>Merchant and category data are normalised through a mapping table (see below), then grouped into the categories the reward rules are written against.</li>
+    <li>Merchants that could plausibly map to more than one category are flagged rather than resolved, with the value at stake between interpretations recorded.</li>
+  </ul>
+  <h4>Why no language model</h4>
+  <p>This is a fetch, a join and a group-by. A model here would add latency, introduce non-determinism into the foundation every downstream figure rests on, and risk inventing transactions that do not exist.</p>
+  <h4>Known integration risk</h4>
+  <p>Plaid returns its own category taxonomy, not the merchant category codes that issuer terms are written in. A maintained mapping table sits between the two. This is small — roughly one row per supported category — but it must be built early, because every downstream number depends on the join being right.</p>
+</div>
+
+<!-- agent 2 -->
+<div class="agent">
+  <div class="agent__h">
+    <span class="agent__n">2 &middot; Card Intelligence</span>
+    <span class="badge badge--llm">Gemini</span>
+  </div>
+  <p>Reads the issuer&rsquo;s own terms — a PDF or a web page — and extracts the structured reward rules: which category, what rate, what cap, on what cycle. Rechecks on a schedule so that a rate change propagates without anyone noticing manually.</p>
+  <dl class="io">
+    <dt>Reads</dt><dd>Terms PDFs and pages (user-supplied)</dd>
+    <dt>Writes</dt><dd>card_rules · agent_runs</dd>
+  </dl>
+  <h4>How it works</h4>
+  <ul>
+    <li>Gemini&rsquo;s document understanding parses the source into a strict schema — category, rate, cap, cycle — rather than free text, so downstream code can rely on the shape.</li>
+    <li><strong>Multimodal handling matters here.</strong> A meaningful fraction of card terms are distributed as scanned images with no text layer. Vision-capable extraction is what makes those readable at all.</li>
+    <li>Extraction confidence is recorded alongside the rules. Low confidence is treated as a failure, not a result.</li>
+    <li>Every rule retains its provenance: the document, the page or URL, and the timestamp it was read.</li>
+  </ul>
+  <h4>Failure handling</h4>
+  <p>If a document cannot be read with confidence, the card is <em>excluded from every comparison</em> rather than guessed at, the interface states why, and the user is offered manual rate entry as a recovery path. If a source rate-limits, the previously extracted rules are retained but marked stale with the date of the last successful read.</p>
+  <h4>Why this is global, not per-user</h4>
+  <p>Reward rules belong to the card, not the cardholder. Parsing an issuer&rsquo;s terms once serves every user of the system, and the card catalogue becomes a by-product of work already done rather than a separate feature.</p>
+</div>
+
+<!-- agent 3 -->
+<div class="agent">
+  <div class="agent__h">
+    <span class="agent__n">3 &middot; Forecast</span>
+    <span class="badge badge--det">Mostly deterministic</span>
+  </div>
+  <p>Projects near-term spending, and — more usefully — identifies the specific future dates on which the right card changes.</p>
+  <dl class="io">
+    <dt>Reads</dt><dd>transactions · planned · card_rules</dd>
+    <dt>Writes</dt><dd>forecasts · agent_runs</dd>
+  </dl>
+  <h4>How it works</h4>
+  <ul>
+    <li>Projects a spending range from recent history, stated with an explicit confidence band rather than a false point estimate.</li>
+    <li>Merges in spending the user has declared — a trip, a large purchase — which no amount of history could have predicted.</li>
+    <li><strong>Detects cap collisions.</strong> Given a projected or declared amount in a category, it determines whether the best card&rsquo;s cap will be breached, on what date, by how much, and how the spend should be split. This is where the forecast stops being analytics and starts being instruction.</li>
+    <li>Emits a dated timeline: cap crossings, bonus deadlines, cycle resets, declared events, and scheduled agent rechecks.</li>
+  </ul>
+  <h4>What it deliberately does not do</h4>
+  <p>It does not claim seasonality. Sandbox transaction history is too thin to support that claim honestly, and the interface says as much on screen. A language model is used only to interpret free-text declarations such as &ldquo;Lisbon trip, 19&ndash;22 August&rdquo; into structured dates, amounts and categories.</p>
+</div>
+
+<!-- agent 4 -->
+<div class="agent">
+  <div class="agent__h">
+    <span class="agent__n">4 &middot; Simulation &amp; Strategy</span>
+    <span class="badge badge--det">Deterministic — strictly</span>
+  </div>
+  <p>The optimiser. Prices every card against every category of actual spending and computes the gap between what was earned and what the best available choice would have earned.</p>
+  <dl class="io">
+    <dt>Reads</dt><dd>transactions · card_rules · forecasts · goal</dd>
+    <dt>Writes</dt><dd>strategy_runs · agent_runs</dd>
+  </dl>
+  <h4>How it works</h4>
+  <ul>
+    <li><strong>Three-track normalisation.</strong> Points, cash back and air miles are not comparable until priced in dollars. Every track is converted to nominal value at a stated rate, and that assumption is displayed in the interface rather than buried in a constant.</li>
+    <li>Cap-aware simulation: a card stops being the best choice the moment its cap is reached, so headroom is tracked per card per cycle and factored into every ranking.</li>
+    <li>Where two cards score within a cent of each other, the result is recorded as a <em>tie</em>. The system does not invent a winner where none exists; it surfaces the human-judgeable tiebreaker instead.</li>
+    <li>When a goal exists, it also computes pace: current balance, earning rate, projected arrival date against the deadline, and the single change that most improves that date.</li>
+  </ul>
+  <div class="warn">
+    <p class="note__l">Why this agent must never use a language model</p>
+    <p>Every dollar figure the user sees originates here. Those figures are compared, later, against what the transactions actually returned — on a screen built specifically to expose the difference. A generated number would make that comparison meaningless, and would be caught by our own reporting. Determinism here is what makes the accountability loop in section 2.5 possible at all.</p>
+  </div>
+</div>
+
+<!-- agent 5 -->
+<div class="agent">
+  <div class="agent__h">
+    <span class="agent__n">5 &middot; Advisory</span>
+    <span class="badge badge--llm">Gemini</span>
+  </div>
+  <p>Turns the optimiser&rsquo;s output into something a person can act on, and takes responsibility for what it recommended.</p>
+  <dl class="io">
+    <dt>Reads</dt><dd>strategy_runs · advice (history)</dd>
+    <dt>Writes</dt><dd>advice · agent_runs</dd>
+  </dl>
+  <h4>How it works</h4>
+  <ul>
+    <li>Writes each recommendation as an imperative with its cost of inaction, ranked by dollars at risk before the nearest deadline rather than by raw size.</li>
+    <li>Composes the <strong>reasoning trace</strong>: which agent contributed what, with the figures each one used. This is what makes a recommendation checkable instead of merely asserted.</li>
+    <li>Constrained to describe only numbers it was handed. It has no arithmetic authority.</li>
+    <li>Records the predicted value with each recommendation, then reconciles against actual earnings once the period closes — including the reason for any gap.</li>
+    <li>Learns from user response: dismissed categories of advice are not re-raised, and thresholds adjust. An expired recommendation triggers earlier warning next cycle.</li>
+  </ul>
+</div>
+
+<!-- ============================================================= 5 -->
+<h2 id="s5"><span class="n">05</span>Data architecture</h2>
+
+<pre class="dia">users/{uid}
+  ├─ goal                 user-written  · read by Strategy
+  ├─ planned/{id}         user-written  · read by Forecast
+  ├─ plaid_items/{id}     access token + sync cursor · SERVER ONLY
+  ├─ wallet/{cardId}      cards held, last 4, cycle spend
+  ├─ transactions/{id}    Ingestion
+  ├─ forecasts/{runId}    Forecast
+  ├─ strategy_runs/{id}   Strategy
+  ├─ advice/{id}          Advisory · open | acted | dismissed | expired
+  ├─ agent_runs/{runId}   every agent · powers the activity log
+  └─ snapshots/current    ◀── THE READ MODEL
+
+card_rules/{cardId}       global — parsed once, serves every user
+mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</pre>
+
+<h3>The read model</h3>
+<p>Rather than have the interface join eight collections, a projection step composes a single document matching exactly the shape the frontend expects. The interface performs one read. The benefits compound: no waterfall requests, no join logic in components, and a single place that must change when either side evolves.</p>
+<p>The document holds aggregates only — categories, cards, recommendations, a truncated run log — so it remains far inside the platform&rsquo;s document size limit regardless of how many transactions accumulate underneath it.</p>
+
+<h3>Two deliberate choices</h3>
+<ul>
+  <li><strong>Card rules are global.</strong> They belong to the card, not the holder. This makes parsing work once and serve everyone.</li>
+  <li><strong>Credentials are unreadable by any client.</strong> Access tokens live in a collection denied to the browser outright and touched only server-side. A token reaching a client is the one unrecoverable failure in this design, so it is prevented structurally rather than by convention.</li>
+</ul>
+
+<!-- ============================================================= 6 -->
+<h2 id="s6"><span class="n">06</span>Frontend architecture</h2>
+
+<p><strong>Next.js 16 (App Router), React 19, TypeScript, Tailwind v4.</strong> Server components by default; client components only where the user provides input.</p>
+
+<h3>The contract</h3>
+<p>Every page reads one typed <code>Snapshot</code> object. Seven files import it. Substituting live data for fixtures is a single-file change, and no component is aware of where its data came from. This is what makes the frontend genuinely ready for the backend rather than merely compatible with it.</p>
+
+<h3>Seven surfaces, each answering for one agent</h3>
+<div class="tw"><table>
+<thead><tr><th>Route</th><th>Question it answers</th><th>Agent it evidences</th></tr></thead>
+<tbody>
+<tr><td class="mono">/</td><td>What happened, and has the advice been worth taking?</td><td>Strategy + Advisory</td></tr>
+<tr><td class="mono">/forecast</td><td>What is about to happen, and on which dates?</td><td>Forecast</td></tr>
+<tr><td class="mono">/goals</td><td>What am I working toward, and will I get there?</td><td>Strategy</td></tr>
+<tr><td class="mono">/history</td><td>What was promised, and what did it return?</td><td>Advisory</td></tr>
+<tr><td class="mono">/cards</td><td>What do I hold, and what was read to decide?</td><td>Card Intelligence</td></tr>
+<tr><td class="mono">/activity</td><td>Is this system actually running?</td><td>All five</td></tr>
+<tr><td class="mono">connect modal</td><td>Setup</td><td>Ingestion</td></tr>
+</tbody>
+</table></div>
+
+<h3>The write path</h3>
+<p>Three places where the user gives the system something, each placed with the agent that consumes it rather than collected in a settings page — because two of the three are worth nothing without immediate feedback:</p>
+<ul>
+  <li><strong>Adding a card</strong> sits on the cards page. Extraction runs visibly, then the rules it found are shown for correction <em>before</em> they drive anything.</li>
+  <li><strong>Planned spending</strong> sits against the timeline it changes. Declaring a purchase recalculates the projection and, if it would breach a cap, inserts the collision as a new dated warning.</li>
+  <li><strong>The goal</strong> has its own surface. Pace, projected arrival and the shortfall recompute live as the fields change.</li>
+</ul>
+<p>Recommendations can be marked done or dismissed, which is what feeds the accountability record. No state is a dead end: an unset preference, unread rules and stale rules each offer the action that resolves them.</p>
+
+<h3>Design system</h3>
+<p>A single palette carries meaning rather than decoration. Brass is reward that went unclaimed; verdigris is reward banked; ember marks states needing attention. One bar grammar — solid for earned, hatched for missed — runs at two scales: full width in the hero, repeated small for every category. Categories sort by reward <em>missed</em> rather than amount spent, because the largest category is rarely the largest leak.</p>
+
+<!-- ============================================================= 7 -->
+<h2 id="s7"><span class="n">07</span>Chrome extension</h2>
+
+<p>Manifest V3. A content script identifies the merchant and whether the current page is a checkout. The popup shows which card to use, the rate, the reason, any cap caveat, the runner-up, and the same reasoning trace as the dashboard.</p>
+
+<div class="note">
+  <p class="note__l">The hard boundary</p>
+  <p>The extension states, directly above the point where a user would type their card number: <strong>CardSense never fills or stores a card number.</strong> The user selects and enters their own card. This is why it requires only <code>activeTab</code> and no payment-related permissions — there is no payment surface to attack.</p>
+</div>
+
+<!-- ============================================================= 8 -->
+<h2 id="s8"><span class="n">08</span>Deployment topology</h2>
+
+<p>Two Cloud Run services, both scaling to zero when idle:</p>
+<ul>
+  <li><strong>web</strong> — the Next.js application, serving the dashboard.</li>
+  <li><strong>agents</strong> — the ADK pipeline, exposed for on-demand runs and triggered on a schedule by Cloud Scheduler for the recurring pass.</li>
+</ul>
+<p>Firestore provides both state and coordination. Its realtime listeners drive live agent progress in the interface: the client subscribes to the current run document and watches each agent report in as it completes — the onboarding sequence is the pipeline itself, not an animation of one.</p>
+<p>Scaling to zero matters beyond cost: an agent system that idles for free is one that can run on a schedule indefinitely without a standing bill, which is the deployment shape this product actually needs.</p>
+
+<!-- ============================================================= 9 -->
+<h2 id="s9"><span class="n">09</span>Security &amp; privacy</h2>
+<ul>
+  <li>Plaid access tokens never leave the server. The collection holding them is unreadable by any client, enforced in security rules rather than by convention.</li>
+  <li>No card numbers are stored, transmitted, or entered anywhere in the system.</li>
+  <li>The browser reads only the agent run log directly; all other data is served through server components using privileged credentials.</li>
+  <li>A visible disclaimer states the product is informational and not licensed financial advice.</li>
+  <li>Sandbox data only. No production financial connection exists.</li>
+</ul>
+
+<!-- ============================================================= 10 -->
+<h2 id="s10"><span class="n">10</span>How the system degrades</h2>
+<p>Each of these is a first-class state in the interface with a visible recovery path, not an error swallowed in a log.</p>
+<div class="tw"><table>
+<thead><tr><th>Condition</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td>Terms document fails to parse</td><td>Card excluded from every comparison; manual rate entry offered</td></tr>
+<tr><td>Terms source rate-limited</td><td>Rules marked stale with date of last successful read; immediate recheck offered</td></tr>
+<tr><td>Merchant maps to multiple categories</td><td>Flagged, with the value at stake between interpretations</td></tr>
+<tr><td>Transaction spans two categories</td><td>Split at line-item level and annotated</td></tr>
+<tr><td>Two cards score identically</td><td>Presented as a tie with the human-judgeable tiebreaker</td></tr>
+<tr><td>Reward cap reached mid-cycle</td><td>Surfaced on the card and as a dated forecast event</td></tr>
+<tr><td>Recommendation expires unused</td><td>Recorded against the track record with its cost; threshold adjusted</td></tr>
+<tr><td>No goal set</td><td>Agent picks, states that it picked, and offers the correction</td></tr>
+</tbody>
+</table></div>
+
+<!-- ============================================================= 11 -->
+<h2 id="s11"><span class="n">11</span>Tooling against the criteria</h2>
+
+<div class="tw"><table>
+<thead><tr><th>Tool</th><th>Where it is used</th><th>Criterion it serves</th></tr></thead>
+<tbody>
+<tr><td><strong>Gemini API</strong></td><td>Card Intelligence (document understanding, including multimodal extraction from scanned terms); Advisory (plain-language recommendations and reasoning traces)</td><td>Innovation &amp; utility</td></tr>
+<tr><td><strong>Agent Development Kit</strong></td><td>The five-agent pipeline; sequential composition with a parallel stage; per-agent tooling; the evaluation harness used to regression-test agent behaviour</td><td>Architectural discipline</td></tr>
+<tr><td><strong>Cloud Run</strong></td><td>Two services — the web application and the agent pipeline — both scaling to zero</td><td>Architecture &amp; production readiness</td></tr>
+<tr><td><strong>Firestore</strong></td><td>Agent state and memory; the coordination mechanism between agents; the read model; realtime listeners driving live progress in the UI</td><td>Architecture &amp; demo</td></tr>
+<tr><td><strong>Cloud Scheduler</strong></td><td>Triggers the recurring autonomous run — the thing that makes this a background system rather than a page you visit</td><td>Operational utility</td></tr>
+<tr><td><strong>Google AI Studio</strong></td><td>Prompt development and iteration for the two Gemini-driven agents before any agent code is written</td><td>Development velocity</td></tr>
+</tbody>
+</table></div>
+
+<h3>How each criterion is addressed</h3>
+<h4>Innovation &amp; operational utility</h4>
+<p>Two things here are genuinely uncommon. First, the system acts <em>before</em> the fact — a declared trip produces a dated warning that a cap will be breached mid-journey, with the split to make instead. Second, the system is <strong>accountable</strong>: it records what it predicted and reports what actually happened, including its own misses. Most tools of this kind make claims; this one is checkable.</p>
+<h4>Architectural discipline &amp; tech stack</h4>
+<p>Five agents coordinating through shared state with no direct calls; a parallel stage where the dependency graph permits it; a deliberate and defended boundary between what a language model does and what deterministic code does; and a read model that decouples agent schemas from the interface entirely.</p>
+<h4>Demo &amp; production readiness</h4>
+<p>A run log showing every agent execution with timing, inputs, outputs and failures. Eight degraded states handled visibly rather than hidden. A deployed URL that scales to zero. And an architecture document that states plainly what is built and what is not.</p>
+
+<!-- ============================================================= 12 -->
+<h2 id="s12"><span class="n">12</span>Implementation status</h2>
+<p>Stated honestly, as of the date on this document.</p>
+
+<div class="status">
+  <div class="status__c" data-s="built">
+    <p class="status__l">Built &amp; verified</p>
+    <ul>
+      <li>Seven-route web application, all interaction states</li>
+      <li>Chrome extension popup</li>
+      <li>Complete design system</li>
+      <li>The <code>Snapshot</code> data contract</li>
+      <li>Deterministic pace-projection and cap-collision logic</li>
+      <li>All three user input flows</li>
+      <li>Responsive to 375px; clean production build and lint</li>
+    </ul>
+  </div>
+  <div class="status__c" data-s="partial">
+    <p class="status__l">Placeholder</p>
+    <ul>
+      <li>All data is fixtures — internally consistent, and containing every degraded state in section 10 by design</li>
+      <li>User input persists in memory only</li>
+      <li>Reward conversion rates pending confirmation</li>
+      <li>Extension content script exists but is not yet wired to the popup</li>
+    </ul>
+  </div>
+  <div class="status__c" data-s="none">
+    <p class="status__l">Not yet built</p>
+    <ul>
+      <li>The five agents</li>
+      <li>Firestore</li>
+      <li>Plaid integration</li>
+      <li>Authentication</li>
+      <li>Server-side write endpoints</li>
+      <li>Deployment</li>
+    </ul>
+  </div>
+</div>
+
+<div class="note">
+  <p class="note__l">On building the interface first</p>
+  <p>The fixtures were written to contain the awkward cases deliberately — a cap reached mid-cycle, two cards tied, a document that would not parse, a rate-limited source, an ambiguous merchant, an expired recommendation. Building the interface against those states first means the agents have a precise target to hit, and the failure modes were designed rather than discovered late.</p>
+</div>
+
+<!-- ============================================================= 13 -->
+<h2 id="s13"><span class="n">13</span>Known limitations</h2>
+<ul>
+  <li><strong>Conversion rates are placeholders.</strong> Points and miles are priced at assumed rates pending confirmation against issuer transfer charts. The interface states this on screen rather than presenting them as settled.</li>
+  <li><strong>Forecast is trend-based, not seasonal.</strong> Sandbox history is too thin to support a seasonality claim, and we do not make one.</li>
+  <li><strong>Card coverage is a fixed seeded set</strong> — roughly eight to ten cards — not open-ended scraping.</li>
+  <li><strong>Category mapping is maintained by hand.</strong> Plaid&rsquo;s taxonomy does not map one-to-one onto the codes issuer terms are written in.</li>
+  <li><strong>Sandbox data only.</strong> No production financial connection, by design and by scope.</li>
+  <li><strong>Single user.</strong> Authentication and multi-tenancy are designed for but not implemented.</li>
+</ul>
+
+<!-- ============================================================= 14 -->
+<h2 id="s14"><span class="n">14</span>Action plan</h2>
+
+<div class="internal">
+  <p class="note__l">Internal section</p>
+  <p>This section is a working plan for the team, not part of the architecture submission. Consider removing it from the copy sent to judges.</p>
+</div>
+
+<p><strong>Two people. Twenty-three days. Both new to this stack.</strong> The plan below is shaped around one conviction: the way teams lose a hackathon is not by building too little, it is by having nothing that runs until the final week.</p>
+
+<div class="note">
+  <p class="note__l">The single most important idea in this plan</p>
+  <p>On day three — before a single agent exists — copy the placeholder values into the database by hand, point the frontend at it, and deploy. You will have a live, recordable demo running on real infrastructure with fake numbers. From that moment you always have something to submit, and every subsequent step is an improvement rather than a gamble. Replace one agent&rsquo;s contribution at a time after that.</p>
+</div>
+
+<h3>Before anything else — your first three hours</h3>
+<ol>
+  <li>Both of you: get the existing frontend running locally. <code>npm run setup</code> then <code>npm run dev</code>. Click every page. This is the thing you are building a backend for; know it.</li>
+  <li>Create one Google Cloud project. One. Share it. Enable Firestore, Cloud Run and the Gemini API.</li>
+  <li>Create a Plaid sandbox account and save the keys somewhere you both can reach.</li>
+  <li>Both of you: complete the ADK quickstart — the hello-world agent, nothing more. Two hours, together, on a call. Do not read the whole documentation site.</li>
+  <li>Agree on Python for the agents and push a first commit to the shared repository.</li>
+</ol>
+
+<h3>Phases</h3>
+
+<div class="phase">
+  <p class="phase__d">Days 1–2 &middot; Aug 8–10</p>
+  <p class="phase__t">Foundations</p>
+  <p class="phase__o">Both</p>
+  <ul>
+    <li>Cloud project, Firestore in native mode, service account credentials</li>
+    <li>Plaid sandbox keys; Gemini API key via AI Studio</li>
+    <li>ADK quickstart completed by both people</li>
+    <li>Repository shared, both able to run the frontend</li>
+  </ul>
+  <span class="ms">Milestone: both machines can run everything that exists</span>
+</div>
+
+<div class="phase">
+  <p class="phase__d">Days 3–4 &middot; Aug 11–12</p>
+  <p class="phase__t">The keystone — live infrastructure, fake numbers</p>
+  <p class="phase__o">Both, pairing</p>
+  <ul>
+    <li>Hand-write the placeholder snapshot into Firestore as a single document</li>
+    <li>Replace the fixture import with a Firestore read (one file)</li>
+    <li>Mark the pages dynamic so they read at request time rather than build time</li>
+    <li>Deploy the web service to Cloud Run</li>
+    <li><strong>Record a rough backup demo video the same day</strong></li>
+  </ul>
+  <span class="ms">Milestone: a public URL you could submit today</span>
+</div>
+
+<div class="phase">
+  <p class="phase__d">Days 5–8 &middot; Aug 13–16</p>
+  <p class="phase__t">Ingestion &amp; Card Intelligence, in parallel</p>
+  <p class="phase__o">A: Ingestion &nbsp;·&nbsp; B: Card Intelligence</p>
+  <ul>
+    <li><strong>A</strong> — Plaid Link in the connect flow; <code>/transactions/sync</code> with a stored cursor; build the category mapping table by hand; write normalised transactions; compute the totals and category breakdown into the snapshot</li>
+    <li><strong>B</strong> — develop the extraction prompt in AI Studio <em>before</em> writing agent code; structured output to a strict schema; run it against eight to ten real terms documents; handle one scanned PDF with multimodal extraction; write to card rules with provenance</li>
+  </ul>
+  <span class="ms">Milestone: the headline number and the cards page are real</span>
+</div>
+
+<div class="phase">
+  <p class="phase__d">Days 9–13 &middot; Aug 17–21</p>
+  <p class="phase__t">Forecast &amp; Strategy, in parallel</p>
+  <p class="phase__o">A: Forecast &nbsp;·&nbsp; B: Strategy</p>
+  <ul>
+    <li><strong>A</strong> — trend projection with a confidence band; merge declared plans; port the existing cap-collision logic from the frontend, where it already works, into the agent</li>
+    <li><strong>B</strong> — the optimiser: per-category best card by nominal value, three-track conversion, cap headroom tracking, tie detection, goal pace projection</li>
+    <li>Both: keep the deployed URL green. Nothing merges that breaks it.</li>
+  </ul>
+  <span class="ms">Milestone: every figure on the dashboard is computed, not copied</span>
+</div>
+
+<div class="phase">
+  <p class="phase__d">Days 14–18 &middot; Aug 22–26</p>
+  <p class="phase__t">Advisory, the write path, and the run log</p>
+  <p class="phase__o">Both</p>
+  <ul>
+    <li>Advisory agent: recommendations plus the reasoning trace, constrained to describe only figures it was given</li>
+    <li>Server actions for the goal, planned spending, adding a card, and resolving advice</li>
+    <li>Agent run logging so the activity page shows real executions</li>
+    <li>Realtime listener so onboarding progress reflects the actual pipeline</li>
+    <li>Cloud Scheduler triggering the recurring run</li>
+  </ul>
+  <span class="ms">Milestone: the full loop closes without human intervention</span>
+</div>
+
+<div class="phase">
+  <p class="phase__d">Days 19–22 &middot; Aug 27–30</p>
+  <p class="phase__t">Evaluation, polish, and the recording</p>
+  <p class="phase__o">Both</p>
+  <ul>
+    <li>ADK evaluation runs — these are evidence for the architecture criterion, so keep the output</li>
+    <li>Confirm the real conversion rates and replace the placeholders</li>
+    <li>Bundle the extension&rsquo;s fonts so it renders without a network</li>
+    <li>Keep the paced replay path for recording; do not depend on a live run on camera</li>
+    <li><strong>Record on the 28th or 29th. Submit on the 30th.</strong></li>
+  </ul>
+  <span class="ms">Milestone: submitted with a day in hand</span>
+</div>
+
+<div class="warn">
+  <p class="note__l">Leave the 31st empty</p>
+  <p>The deadline is the 31st. Treat the 30th as the deadline. Every team that plans to finish on the last day discovers something on the last day.</p>
+</div>
+
+<h3>Working rules for a two-person beginner team</h3>
+<ul>
+  <li><strong>Learn narrowly.</strong> You need one ADK concept — an agent with tools — and one Gemini feature: structured output. Everything else is a distraction until it is required.</li>
+  <li><strong>Prototype prompts in AI Studio first.</strong> Getting extraction right is a prompt problem, not a code problem. Solve it in the browser, then paste it into an agent.</li>
+  <li><strong>Write the deterministic agents as plain functions first.</strong> Ingestion, Forecast and Strategy are ordinary code. Get them correct standalone, then wrap them as agents. Do not learn a framework and a domain simultaneously.</li>
+  <li><strong>The deployed URL is sacred.</strong> If a change breaks it, revert first and diagnose after.</li>
+  <li><strong>Time-box debugging to forty-five minutes.</strong> Then swap problems with your teammate or ask. Beginners lose days to single bugs.</li>
+  <li><strong>Fifteen minutes at the start of each day.</strong> What you did, what you are doing, what is blocking you. Nothing else.</li>
+  <li><strong>Commit and push at the end of every day</strong>, even unfinished. The other person cannot help with work they cannot see.</li>
+</ul>
+
+<h3>The three risks most likely to hurt you</h3>
+<ol>
+  <li><strong>The category mapping.</strong> Plaid&rsquo;s taxonomy against the wording in issuer terms. It looks trivial and quietly consumes a weekend. Confirm what sandbox actually returns in week one.</li>
+  <li><strong>Agent runtime against a four-minute video.</strong> A full pipeline pass takes far longer than the demo can afford, and a live call can hang on camera. The paced replay is not a shortcut; it is the responsible choice.</li>
+  <li><strong>Integrating late.</strong> If both of you build agents in isolation until the final week, you will spend that week integrating instead of polishing. The day-three keystone exists precisely to prevent this.</li>
+</ol>
+
+<footer>
+  CardSense &middot; System architecture &middot; August 2026 &middot; Prepared for the All Things Agentic Hackathon, Taskmaster track
+</footer>
+
+</div>
+</body>
+</html>
