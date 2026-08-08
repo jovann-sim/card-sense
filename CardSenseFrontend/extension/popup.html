@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CardSense</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="pop" id="pop">
+      <header class="pop__head">
+        <p class="mark">Card<span>Sense</span></p>
+        <p class="merchant" id="merchant">Detecting merchant…</p>
+      </header>
+
+      <!-- The verdict. One card, named, with the reason directly under it. -->
+      <section class="verdict">
+        <p class="verdict__eyebrow">Use this card</p>
+        <p class="verdict__card" id="card">—</p>
+        <p class="verdict__digits num" id="digits">—</p>
+        <p class="verdict__rate" id="rate"></p>
+      </section>
+
+      <p class="reason" id="reason"></p>
+
+      <!-- Only rendered when the agent has a caveat worth the interruption. -->
+      <div class="caveat" id="caveat" hidden></div>
+
+      <section class="runner" id="runnerWrap" hidden>
+        <p class="runner__label">Next best</p>
+        <p class="runner__line"><span id="runner"></span></p>
+      </section>
+
+      <details class="why">
+        <summary class="why__toggle"><span class="why__chev">›</span> How this was decided</summary>
+        <ol class="why__steps" id="why"></ol>
+      </details>
+
+      <footer class="pop__foot">
+        <p class="manual">
+          Enter the card yourself. CardSense never fills or stores a card number.
+        </p>
+        <p class="fine">Informational only, not licensed financial advice.</p>
+      </footer>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

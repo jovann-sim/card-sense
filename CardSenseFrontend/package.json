@@ -1,0 +1,13 @@
+{
+  "name": "cardsense",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous multi-agent credit card reward optimiser. This root package holds no dependencies — it only forwards commands to web/ so you can run them from the repo root.",
+  "scripts": {
+    "setup": "npm --prefix web install",
+    "dev": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix web run start",
+    "lint": "npm --prefix web run lint"
+  }
+}
