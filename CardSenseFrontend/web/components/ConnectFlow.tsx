@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Script from "next/script";
 import type { AgentRun } from "@/lib/types";
+import { api, userId } from "@/lib/client-api";
 
 /**
  * Onboarding, as a dialog over the dashboard rather than its own route — the
@@ -42,15 +45,73 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
   const [linked, setLinked] = useState(false);
   const [track, setTrack] = useState<string | null>(null);
   const [stage, setStage] = useState(-1);
+  const [plaidReady, setPlaidReady] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const linkRef = useRef<ReturnType<NonNullable<Window["Plaid"]>["create"]> | null>(null);
+  const syncingRef = useRef(false);
+  const router = useRouter();
+
+  const destroyLink = useCallback(() => {
+    linkRef.current?.destroy();
+    linkRef.current = null;
+  }, []);
+
+  const completePlaidConnection = useCallback(async (publicToken: string) => {
+    syncingRef.current = true;
+    try {
+      await api("/api/v1/plaid/exchange-token", {
+        method: "POST", body: JSON.stringify({ publicToken, userId }),
+      });
+      await api("/api/v1/plaid/sync", { method: "POST", body: JSON.stringify({ userId }) });
+      setLinked(true);
+      router.refresh();
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : "Unable to sync Plaid transactions.");
+    } finally {
+      syncingRef.current = false;
+      setConnecting(false);
+      destroyLink();
+    }
+  }, [destroyLink, router]);
+
+  async function connectPlaid() {
+    if (connecting || !plaidReady || !window.Plaid) return;
+    setConnectionError(null);
+    setConnecting(true);
+    try {
+      const result = await api<{ link_token: string }>("/api/v1/plaid/link-token", {
+        method: "POST", body: JSON.stringify({ userId }),
+      });
+      destroyLink();
+      linkRef.current = window.Plaid.create({
+        token: result.link_token,
+        onSuccess: completePlaidConnection,
+        onExit: (error) => {
+          if (syncingRef.current) return;
+          destroyLink();
+          setConnecting(false);
+          if (error) setConnectionError(error.display_message ?? error.error_message ?? "Plaid Link was closed.");
+        },
+      });
+      linkRef.current.open();
+    } catch (error) {
+      setConnecting(false);
+      setConnectionError(error instanceof Error ? error.message : "Unable to start Plaid Link.");
+    }
+  }
+
+  useEffect(() => () => destroyLink(), [destroyLink]);
 
   const close = useCallback(() => {
+    destroyLink();
     setOpen(false);
     setStep("accounts");
     setLinked(false);
     setTrack(null);
     setStage(-1);
-  }, []);
+  }, [destroyLink]);
 
   useEffect(() => {
     if (!open) return;
@@ -88,9 +149,12 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
 
   if (!open) {
     return (
-      <button type="button" className="replay" onClick={() => setOpen(true)}>
-        Replay connect
-      </button>
+      <>
+        <Script id="plaid-link" src="https://cdn.plaid.com/link/v2/stable/link-initialize.js" strategy="afterInteractive" onLoad={() => setPlaidReady(true)} />
+        <button type="button" className="replay" onClick={() => setOpen(true)}>
+          Replay connect
+        </button>
+      </>
     );
   }
 
@@ -134,13 +198,15 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
                   <button
                     type="button"
                     className="btn"
-                    onClick={() => setLinked(true)}
+                    onClick={connectPlaid}
+                    disabled={!plaidReady || connecting}
                   >
-                    Connect with Plaid
+                    {connecting ? "Connecting…" : plaidReady ? "Connect with Plaid" : "Loading Plaid…"}
                   </button>
                   <p className="dialog__fine">
                     Sandbox credentials — no real account is touched.
                   </p>
+                  {connectionError && <p className="dialog__fine" role="alert">{connectionError}</p>}
                 </>
               ) : (
                 <>

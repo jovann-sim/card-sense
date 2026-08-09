@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import type { AdviceRecord } from "@/lib/types";
 import { dayMonth, money, pct } from "@/lib/format";
-import { snapshot } from "@/lib/mock";
+import { getSnapshot } from "@/lib/api";
 
 export const metadata: Metadata = {
   title: "CardSense — Track record",
@@ -59,7 +59,8 @@ function Row({ record }: { record: AdviceRecord }) {
   );
 }
 
-export default function HistoryPage() {
+export default async function HistoryPage() {
+  const snapshot = await getSnapshot();
   const { trackRecord } = snapshot;
   const open = trackRecord.records.filter((r) => r.outcome === "open");
   const closed = trackRecord.records.filter((r) => r.outcome === "acted");

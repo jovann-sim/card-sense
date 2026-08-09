@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { AgentId, Recommendation } from "@/lib/types";
 import { dayMonth, daysUntil, money, moneyWhole } from "@/lib/format";
+import { api } from "@/lib/client-api";
 
 const AGENT_LABEL: Record<AgentId, string> = {
   ingestion: "Ingestion agent",
@@ -29,6 +31,17 @@ export function Recommendations({
   now: string;
 }) {
   const [resolved, setResolved] = useState<Record<string, Resolution>>({});
+  const router = useRouter();
+
+  async function resolve(id: string, outcome: "acted" | "dismissed") {
+    try {
+      await api(`/api/v1/advice/${id}/resolve`, { method: "POST", body: JSON.stringify({ outcome }) });
+      setResolved((current) => ({ ...current, [id]: outcome === "acted" ? "done" : "dismissed" }));
+      router.refresh();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to update recommendation.");
+    }
+  }
 
   return (
     <div>
@@ -113,18 +126,14 @@ export function Recommendations({
               <button
                 type="button"
                 className="btn btn--small btn--quiet"
-                onClick={() =>
-                  setResolved((r) => ({ ...r, [rec.id]: "done" }))
-                }
+                onClick={() => resolve(rec.id, "acted")}
               >
                 Mark as done
               </button>
               <button
                 type="button"
                 className="rec__dismiss"
-                onClick={() =>
-                  setResolved((r) => ({ ...r, [rec.id]: "dismissed" }))
-                }
+                onClick={() => resolve(rec.id, "dismissed")}
               >
                 Not for me
               </button>

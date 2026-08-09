@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import type { AgentId, AgentLogEntry } from "@/lib/types";
 import { longDay, timeOfDay } from "@/lib/format";
-import { snapshot } from "@/lib/mock";
+import { getSnapshot } from "@/lib/api";
 
 export const metadata: Metadata = {
   title: "CardSense — Agent activity",
@@ -24,7 +24,8 @@ function groupByDay(entries: AgentLogEntry[]) {
   return [...days.entries()];
 }
 
-export default function ActivityPage() {
+export default async function ActivityPage() {
+  const snapshot = await getSnapshot();
   const days = groupByDay(snapshot.activity);
   const degraded = snapshot.activity.filter((e) => e.status === "degraded");
 

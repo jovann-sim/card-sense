@@ -1,8 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { CardDetail, CatalogCard, ParseStatus } from "@/lib/types";
 import { dayMonth, money } from "@/lib/format";
+import { api } from "@/lib/client-api";
 import { AddCardFlow } from "./AddCardFlow";
 
 const PARSE_LABEL: Record<ParseStatus, string> = {
@@ -16,11 +18,13 @@ function Wallet({
   rechecking,
   onRecheck,
   onManual,
+  onRemove,
 }: {
   wallet: CardDetail[];
   rechecking: string | null;
   onRecheck: (last4: string) => void;
   onManual: (card: CardDetail) => void;
+  onRemove: (card: CardDetail) => void;
 }) {
   return (
     <div className="wallet">
@@ -60,6 +64,14 @@ function Wallet({
           )}
 
           {card.parseNote && <p className="wcard__note">{card.parseNote}</p>}
+
+          <button
+            type="button"
+            className="btn btn--small btn--quiet"
+            onClick={() => onRemove(card)}
+          >
+            Remove card
+          </button>
 
           {/* No state is a dead end: every card that isn't working offers
               the one action that would fix it. */}
@@ -229,6 +241,8 @@ export function CardsView({
   const [adding, setAdding] = useState(false);
   const [manualFor, setManualFor] = useState<CardDetail | null>(null);
   const [rechecking, setRechecking] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const router = useRouter();
 
   function openAdd() {
     setManualFor(null);
@@ -256,14 +270,39 @@ export function CardsView({
     }, 1_200);
   }
 
-  function saveCard(card: CardDetail) {
-    setWallet((list) => {
-      const existing = list.findIndex((c) => c.last4 === card.last4);
-      if (existing === -1) return [...list, card];
-      return list.map((c, i) => (i === existing ? card : c));
-    });
-    setAdding(false);
-    setManualFor(null);
+  async function saveCard(card: CardDetail) {
+    try {
+      await api("/api/v1/cards", {
+        method: "POST",
+        body: JSON.stringify({
+          name: card.name, last4: card.last4, network: card.network,
+          annualFee: card.annualFee, track: card.track, termsUrl: card.source.locator,
+          rules: card.rules,
+        }),
+      });
+      setAdding(false);
+      setManualFor(null);
+      router.refresh();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to save card.");
+    }
+  }
+
+  async function removeCard(card: CardDetail) {
+    const walletId = card.walletId ?? card.id ?? card.cardId;
+    if (!walletId) {
+      setRequestError("This card has no persisted ID. Reload the page and try again.");
+      return;
+    }
+    if (!window.confirm(`Remove ${card.name} ••${card.last4} from your wallet?`)) return;
+    setRequestError(null);
+    try {
+      await api(`/api/v1/cards/${encodeURIComponent(walletId)}`, { method: "DELETE" });
+      setWallet((list) => list.filter((item) => (item.walletId ?? item.id ?? item.cardId) !== walletId));
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to remove card.");
+    }
   }
 
   const showFlow = adding || manualFor !== null;
@@ -310,6 +349,8 @@ export function CardsView({
         />
       )}
 
+      {requestError && <p className="addcard__fine" role="alert">{requestError}</p>}
+
       {tab === "wallet" ? (
         <Wallet
           wallet={wallet}
@@ -319,6 +360,7 @@ export function CardsView({
             setAdding(false);
             setManualFor(card);
           }}
+          onRemove={removeCard}
         />
       ) : (
         <Catalog catalog={catalog} onAddRequest={openAdd} />

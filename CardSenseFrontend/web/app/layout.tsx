@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Archivo, Public_Sans, IBM_Plex_Mono } from "next/font/google";
 import { AgentRail } from "@/components/AgentRail";
 import { SiteFooter } from "@/components/SiteFooter";
-import { snapshot } from "@/lib/mock";
+import { getSnapshot } from "@/lib/api";
 import "./globals.css";
 
 /** Display: an expanded grotesque, used only for figures and headlines. */
@@ -34,9 +34,10 @@ export const metadata: Metadata = {
     "What your spending earned, what it should have earned, and which card to reach for next.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const snapshot = await getSnapshot();
   return (
     // The font variables must land on <html>: globals.css resolves them inside
     // `:root`, which is this element. On <body> they would be out of scope and

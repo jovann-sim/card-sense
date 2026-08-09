@@ -10,7 +10,9 @@ Backend for the CardSense frontend and five-agent architecture.
 - Optional Plaid sandbox ingestion
 - Cloud Run / Cloud Scheduler friendly
 
-The API returns the frontend's existing `Snapshot` contract so the UI can be wired to live data without changing its components.
+The API validates and returns the frontend's existing `Snapshot` contract. The
+current frontend intentionally remains fixture-backed; swapping its single
+fixture read for `GET /api/v1/snapshot` is a separate frontend change.
 
 ## Quick start
 
@@ -60,9 +62,17 @@ The scheduler endpoint should be protected by a service-to-service secret in pro
 
 Agents communicate through persisted state rather than direct agent-to-agent calls. A run writes:
 
-`transactions -> card_rules + forecasts (parallel conceptually) -> strategy_runs -> advice -> snapshots/current`
+`transactions -> forecasts + card_rules -> strategy_runs -> advice -> snapshots/current`
 
-The implementation exposes this as a single orchestration job, while each agent reads/writes only its own state boundary.
+The projection is the sole owner of the read-model shape. Authoritative user
+state lives in subcollections (`transactions`, `planned`, `wallet`,
+`forecasts`, `strategy_runs`, `advice`, `agent_runs`, and `snapshots/current`);
+card rules are globally keyed by stable card ID. Snapshot responses are checked
+against the dashboard contract before they leave the API.
+
+Transactions must include an `accountId` that matches a held card's optional
+`accountId` before the service will claim an actual reward amount. Unmapped
+transactions are surfaced as degraded rather than assigned a placeholder rate.
 
 ## Plaid transactions
 

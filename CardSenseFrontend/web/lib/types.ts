@@ -229,6 +229,12 @@ export interface ParsedRule {
 export type ParseStatus = "parsed" | "failed" | "stale";
 
 export interface CardDetail {
+  /** Persisted wallet document ID, used for user-scoped removal. */
+  cardId?: string;
+  /** Authoritative wallet document ID, distinct from the global card ID. */
+  walletId?: string;
+  /** Legacy Firestore document ID retained in older snapshots. */
+  id?: string;
   name: string;
   last4: string;
   network: string;

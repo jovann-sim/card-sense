@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { CardsView } from "@/components/CardsView";
-import { snapshot } from "@/lib/mock";
+import { getSnapshot } from "@/lib/api";
 
 export const metadata: Metadata = {
   title: "CardSense — Cards",
 };
 
-export default function CardsPage() {
+export default async function CardsPage() {
+  const snapshot = await getSnapshot();
   const unread = snapshot.wallet.filter((c) => c.parseStatus !== "parsed");
 
   return (

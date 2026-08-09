@@ -1,6 +1,5 @@
 from __future__ import annotations
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 import csv, re
 
@@ -16,7 +15,12 @@ class IngestionAgent:
                         amount=self._amount(r)
                         if amount > 0:
                             rows.append({"source_file":path.name,"amount":amount,"date":self._date(r),"category":self._text(r,["category","type","group"],"uncategorized"),"merchant":self._text(r,["merchant","payee","name","description"],"unknown"),"description":self._text(r,["description","memo","details"],"")})
-        store.set_user(uid, {"ingestion": {"transactions": rows, "updatedAt": datetime.utcnow().isoformat()}})
+        for row in rows:
+            # CSV rows do not contain an upstream ID, so use a stable enough
+            # import key to keep the subcollection contract intact.
+            key = f"{row.get('source_file', '')}:{row.get('date', '')}:{row.get('merchant', '')}:{row.get('amount', 0)}"
+            import hashlib
+            store.set_subdoc(uid, "transactions", hashlib.sha256(key.encode()).hexdigest(), row)
         return rows
     def _amount(self,r):
         for k in ["amount","transaction_amount","debit","withdrawal","expense","value"]:

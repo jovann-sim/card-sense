@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type {
   CardCap,
   Forecast,
@@ -11,6 +12,7 @@ import type {
 import { dayMonth, daysUntil, money, moneyWhole } from "@/lib/format";
 import { daysBetween, findCapCollision } from "@/lib/goal";
 import { PlannedForm } from "./PlannedForm";
+import { api } from "@/lib/client-api";
 
 const KIND_LABEL: Record<TimelineKind, string> = {
   event: "Your calendar",
@@ -41,13 +43,18 @@ export function ForecastView({
   const [extraSpend, setExtraSpend] = useState(0);
   const [adding, setAdding] = useState(false);
   const [change, setChange] = useState<Change | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const router = useRouter();
 
   const projected = forecast.projectedSpend + extraSpend;
   const low = projected - forecast.confidence;
   const high = projected + forecast.confidence;
   const actionable = timeline.filter((e) => e.action).length;
 
-  function addItem(item: PlannedItem) {
+  async function addItem(item: PlannedItem) {
+    setSaving(true);
+    setRequestError(null);
     const entries: TimelineEntry[] = [
       {
         date: item.startDate,
@@ -99,6 +106,14 @@ export function ForecastView({
           )}.`
         : null,
     });
+    try {
+      await api("/api/v1/planned", { method: "POST", body: JSON.stringify(item) });
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to save planned spending.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -165,6 +180,9 @@ export function ForecastView({
               </button>
             </div>
           )}
+
+          {requestError && <p className="addcard__fine" role="alert">{requestError}</p>}
+          {saving && <p className="addcard__fine" role="status">Saving planned spending…</p>}
 
           <ol className="tl">
             {timeline.map((entry, i) => {

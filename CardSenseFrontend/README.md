@@ -1,7 +1,8 @@
 # CardSense — front end
 
-Seven surfaces, all built against placeholder fixtures. Nothing talks to a
-backend yet; everything is shaped so wiring it up is a single-file change.
+Seven surfaces consume the backend's single `Snapshot` read model through a
+shared server-side loader. In local development, the deliberate fixture
+fallback keeps the dashboard usable while the backend is offline.
 
 Everything the user enters — cards, planned spending, goals, dismissals — lives
 in React state and is gone on reload. That is deliberate for a shell: it demos
@@ -18,6 +19,21 @@ extension/   Chrome MV3 — the recommend-only checkout popup
 ```bash
 cd web && npm run dev
 ```
+
+For live backend data, start the FastAPI service in a second terminal:
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8080
+```
+
+Then copy `web/.env.local.example` to `web/.env.local`. The default
+`CARDSENSE_API_URL=http://localhost:8080` needs no change for local use. The
+Next.js server fetches the backend on every request; no browser-side API call
+or additional CORS setting is required.
 
 To load the extension: open `chrome://extensions`, turn on Developer mode,
 choose **Load unpacked**, and pick the `extension/` folder.
@@ -63,10 +79,10 @@ rules each offer the action that resolves them.
 ## Where the real data goes
 
 **Dashboard and all pages.** Every component reads one object, typed as
-`Snapshot` in [web/lib/types.ts](web/lib/types.ts). Replace the export in
-[web/lib/mock.ts](web/lib/mock.ts) with a Firestore read returning that same
-shape and nothing else changes. Pages are server components, so the read is a
-plain `await` — no client fetching, no loading states to build.
+`Snapshot` in [web/lib/types.ts](web/lib/types.ts). Server components call
+[web/lib/api.ts](web/lib/api.ts), which fetches `/api/v1/snapshot` with no
+cache. In development it falls back to [web/lib/mock.ts](web/lib/mock.ts) if
+the API is unavailable; production fails visibly instead of showing fake data.
 
 **Extension.** The seam is `getVerdict()` in
 [extension/popup.js](extension/popup.js). It returns a fixed object today;
