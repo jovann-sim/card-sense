@@ -304,28 +304,6 @@ export function CardsView({
     }, 1_200);
   }
 
-  async function saveCard(card: CardDetail) {
-    try {
-      const result = await api<{
-        card: CardDetail;
-        snapshot: { wallet: CardDetail[] };
-      }>("/api/v1/cards", {
-        method: "POST",
-        body: JSON.stringify({
-          name: card.name, last4: card.last4, network: card.network,
-          annualFee: card.annualFee, track: card.track, termsUrl: card.source.locator,
-          rules: card.rules,
-        }),
-      });
-      setWallet(result.snapshot.wallet);
-      setAdding(false);
-      setManualFor(null);
-      router.refresh();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to save card.");
-    }
-  }
-
   async function removeCard(card: CardDetail) {
     const walletId = card.walletId ?? card.id ?? card.cardId;
     if (!walletId) {
@@ -379,10 +357,16 @@ export function CardsView({
       {showFlow && (
         <AddCardFlow
           manualFor={manualFor ?? undefined}
-          onAdd={saveCard}
+          onSaved={(nextWallet) => {
+            // Deliberately no router.refresh() here: refreshing remounts this
+            // component and would throw away the review step before the user
+            // has seen what the agent actually read.
+            setWallet(nextWallet);
+          }}
           onCancel={() => {
             setAdding(false);
             setManualFor(null);
+            router.refresh();
           }}
         />
       )}
