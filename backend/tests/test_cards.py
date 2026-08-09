@@ -49,3 +49,26 @@ def test_snapshot_card_gets_authoritative_wallet_id(monkeypatch):
     normalised = main._normalise_snapshot_wallet(snapshot, "user")
     assert normalised["wallet"][0]["walletId"] == "uob-one"
     assert normalised["wallet"][0]["cardId"] == "added by you-uob-one"
+
+
+def test_snapshot_migration_only_reads_wallet_once(monkeypatch):
+    class CountingStore(Store):
+        wallet_reads = 0
+
+        def get_wallet(self, uid):
+            self.wallet_reads += 1
+            return super().get_wallet(uid)
+
+    test_store = CountingStore()
+    old_snapshot = Orchestrator(test_store).empty_snapshot(main.UID)
+    old_snapshot.pop("readModelVersion")
+    test_store.set_snapshot(main.UID, old_snapshot)
+    test_store.wallet_reads = 0
+    monkeypatch.setattr(main, "store", test_store)
+
+    first = main.snapshot()
+    second = main.snapshot()
+
+    assert first["readModelVersion"] == main.READ_MODEL_VERSION
+    assert second["readModelVersion"] == main.READ_MODEL_VERSION
+    assert test_store.wallet_reads == 1

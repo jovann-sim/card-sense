@@ -25,11 +25,12 @@ from .models import (
     RunResponse,
     CardResponse,
 )
-from .orchestrator import Orchestrator
+from .orchestrator import Orchestrator, project_catalog
 from .plaid_client import get_plaid_client
 
 app = FastAPI(title="CardSense Backend", version="0.2.0")
 logger = logging.getLogger("cardsense")
+READ_MODEL_VERSION = 2
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[x.strip() for x in settings.cors_origins.split(",")],
@@ -152,6 +153,10 @@ def _normalise_snapshot_wallet(snapshot: dict, uid: str = UID) -> dict:
             for card in wallet
             if card.get("cardId") or card.get("id")
         ]
+        # Refresh this derived view too, so snapshots persisted by an older
+        # release immediately show user-added cards after deployment.
+        snapshot["catalog"] = project_catalog(store, uid, persisted_wallet)
+        snapshot["readModelVersion"] = READ_MODEL_VERSION
     return snapshot
 
 
@@ -173,7 +178,11 @@ def snapshot():
     persisted = snap is not None
     if not snap:
         snap = orch.empty_snapshot(UID)
-    snap = _normalise_snapshot_wallet(snap)
+    elif snap.get("readModelVersion") != READ_MODEL_VERSION:
+        # Older snapshots need one live-wallet join. Persist the migrated read
+        # model so ordinary page loads remain a single Firestore document read.
+        snap = _normalise_snapshot_wallet(snap)
+        store.set_snapshot(UID, snap)
     logger.info("snapshot uid=%s duration_ms=%d persisted=%s", UID, round((perf_counter() - started) * 1000), persisted)
     return snap
 

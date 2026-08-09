@@ -41,7 +41,9 @@ export const getSnapshot = cache(async (): Promise<Snapshot> => {
     if (!isSnapshot(payload)) throw new Error("CardSense API returned an invalid Snapshot");
     return payload;
   } catch (error) {
-    if (process.env.NODE_ENV !== "production" && process.env.CARDSENSE_REAL_DATA !== "true") return mockSnapshot;
+    if (process.env.NODE_ENV !== "production" && process.env.CARDSENSE_USE_MOCK_DATA === "true") {
+      return mockSnapshot;
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
     throw new Error(`Unable to load CardSense backend snapshot: ${message}`);
   } finally {

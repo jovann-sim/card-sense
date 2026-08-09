@@ -12,11 +12,51 @@ from .agents.strategy import StrategyAgent, VALUATIONS
 from .models import Snapshot
 
 
+READ_MODEL_VERSION = 2
+
+
 AGENTS = [
     ("ingestion", "Ingestion"), ("forecast", "Forecast"),
     ("card-intelligence", "Card intelligence"), ("strategy", "Simulation & strategy"),
     ("advisory", "Advisory"),
 ]
+
+
+def project_catalog(store, uid, wallet):
+    """Project every held card into All cards, including user-added cards."""
+    catalog = store.get_subcollection(uid, "catalog")
+    held_names = {card.get("name") for card in wallet}
+    rows = [{**item, "held": item.get("name") in held_names} for item in catalog]
+    catalog_names = {item.get("name") for item in rows}
+
+    for card in wallet:
+        if card.get("name") in catalog_names:
+            continue
+        rules = card.get("rules") or (
+            store.get_global_doc("card_rules", card["cardId"]) or {}
+        ).get("rules", [])
+        headline = ", ".join(
+            f"{rule.get('rate', '—')} {rule.get('categoryLabel', '').lower()}".strip()
+            for rule in rules[:2]
+        ) or "Rules not yet readable"
+        tags = [
+            *[str(rule.get("categoryLabel", "")).lower() for rule in rules],
+            str(card.get("track", "cashback")),
+        ]
+        if not card.get("annualFee"):
+            tags.append("no annual fee")
+        rows.append({
+            "name": card["name"],
+            "network": card.get("network", "Unknown"),
+            "headlineRate": headline,
+            "annualFee": card.get("annualFee", 0),
+            "track": card.get("track", "cashback"),
+            "held": True,
+            "deltaVsWallet": 0,
+            **({"deltaNote": card["parseNote"]} if card.get("parseNote") else {}),
+            "tags": list(dict.fromkeys(tag for tag in tags if tag)),
+        })
+    return rows
 
 
 class Orchestrator:
@@ -87,7 +127,7 @@ class Orchestrator:
         preferred = goal.get("track") if goal else None
         track = preferred or "cashback"
         record = self._track_record(advice)
-        data = {"generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": {"spend": round(sum(float(t.get("amount", 0)) for t in transactions), 2), "captured": captured, "unclaimed": strategy["unclaimed"]}, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open"], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": self.store.get_subcollection(uid, "catalog"), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["strategy"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": {"spend": round(sum(float(t.get("amount", 0)) for t in transactions), 2), "captured": captured, "unclaimed": strategy["unclaimed"]}, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open"], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["strategy"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
     def _summary(self, transactions):
