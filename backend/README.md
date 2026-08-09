@@ -25,7 +25,63 @@ cp .env.example .env
 uvicorn app.main:app --reload --port 8080
 ```
 
-For local demo mode, set `DEMO_MODE=true`. This uses deterministic seed data and does not require Firestore, Plaid, or Gemini.
+For local demo mode, set `DEMO_MODE=true`. Storage stays in memory and neither
+Firestore nor Plaid is required.
+
+**Gemini is switched on separately from `DEMO_MODE`.** Set `GOOGLE_CLOUD_PROJECT`
+and it activates; storage and language model are unrelated concerns, and
+coupling them meant you could not read a terms document without also standing
+up Plaid. Set `GEMINI_ENABLED=false` to force it off.
+
+In demo mode the store also writes to `.localstore.json` so cards you add
+survive a restart. Delete that file to start clean; it is gitignored, and
+Firestore takes over entirely when `DEMO_MODE=false`.
+
+## Card intelligence
+
+Reads a card's published terms and returns rules the optimiser can price
+directly. Give it a URL — an HTML page or a PDF — or paste the text.
+
+```bash
+curl -X POST localhost:8080/api/v1/cards -H 'Content-Type: application/json' -d '{
+  "name":"HSBC Revolution","last4":"8842","network":"Visa","track":"miles",
+  "termsUrl":"https://issuer.example/terms.pdf"}'
+```
+
+PDFs are handed to Gemini whole rather than pre-extracted, so scanned documents
+with no text layer still work.
+
+**Every rule carries numbers, not prose:**
+
+| Field | Meaning |
+|---|---|
+| `valuePerDollar` | Nominal dollars returned per dollar spent. The only field a calculation should use. |
+| `rateValue` / `rateUnit` | `4` + `percent`, or `1.4` + `miles_per_dollar` |
+| `rewardType` | `cashback`, `points`, `miles` |
+| `cap` | **Always spend, in dollars.** A reward cap is divided back through the earn rate. |
+| `capValue` / `capType` | The document's own figure and what it limited |
+| `minSpend` | Minimum spend in the cycle to qualify |
+| `rate` | Display string only. Nothing calculates from it. |
+
+Card-level facts land in `characteristics`: issuer, currency, reward currency,
+annual fee, fee waiver spend, minimum income, foreign transaction fee.
+
+**It will not guess.** Given a page whose rates are rendered by JavaScript, it
+returns `no_rules_found` rather than reciting the card's rates from training
+data, and the card is excluded from every comparison until it parses.
+
+| `parseStatus` | When |
+|---|---|
+| `parsed` | Rates read, confidence above `EXTRACTION_MIN_CONFIDENCE` |
+| `stale` | Fetch, quota or model failure **and** we already hold rules — those stay in use |
+| `failed` | Nothing readable, no rates present, or confidence too low |
+
+`failureReason` distinguishes `fetch_failed`, `rate_limited`,
+`unsupported_content`, `model_unavailable`, `no_rules_found`, `low_confidence`
+and `no_source`.
+
+Other endpoints: `POST /api/v1/cards/{card_id}/recheck` re-reads the stored
+terms link; `POST /api/v1/cards/{card_id}/terms` accepts a PDF upload.
 
 ## Google Cloud mode
 

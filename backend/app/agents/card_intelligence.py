@@ -1,15 +1,177 @@
 from __future__ import annotations
-from datetime import datetime, timedelta
-from .runtime import GeminiRuntime
+
+import logging
+from datetime import date, datetime, timedelta, timezone
+
+from ..config import settings
+from .runtime import ModelUnavailable
+from .schema import (
+    EXTRACTION_PROMPT,
+    ExtractionResult,
+    display_rate,
+    spend_cap,
+    value_per_dollar,
+)
+from .terms import FetchError, TermsDocument, document_from_text, fetch_terms
+
+log = logging.getLogger(__name__)
+
+# Failures the card can recover from by itself on the next scheduled pass; the
+# rules we already hold stay usable in the meantime, so the card goes stale
+# rather than failed.
+TRANSIENT = {"rate_limited", "model_unavailable", "fetch_failed"}
+
+NOTES = {
+    "fetch_failed": "The terms document could not be retrieved, so the rates on file were left unchanged.",
+    "rate_limited": "The source refused repeated requests. The rates on file may be out of date.",
+    "unsupported_content": "That link does not lead to a readable terms document.",
+    "model_unavailable": "The document could not be read right now. The rates on file were left unchanged.",
+    "no_rules_found": "The document was read but states no reward rates, so this card is excluded from comparisons.",
+    "low_confidence": "The rates could not be read confidently, so this card is excluded rather than guessed at.",
+    "no_source": "No terms link or text was supplied, so there is nothing to read.",
+}
+
 
 class CardIntelligenceAgent:
-    id="card-intelligence"
-    def __init__(self, runtime): self.runtime=runtime
-    def parse(self, card):
-        fallback={"rules":[],"status":"failed","note":"Terms could not be parsed confidently; card excluded from comparisons."}
-        if not card.get("termsText"):
-            return fallback
-        result=self.runtime.json("Extract reward rules. Return rules with categoryLabel, rate, cap, cycleLabel; status parsed or failed. Do not guess.",{"terms":card["termsText"]},fallback)
-        if not result.get("rules"):
-            return fallback
-        return result | {"status":"parsed"}
+    """Turns a published terms document into reward rules the optimiser can price.
+
+    Deliberately conservative: it will exclude a card rather than assert a rate
+    it is not sure about, because a wrong rate produces confident bad advice,
+    which is worse than no advice.
+    """
+
+    id = "card-intelligence"
+
+    def __init__(self, runtime):
+        self.runtime = runtime
+
+    def parse(self, card: dict, previous: dict | None = None) -> dict:
+        """Read a card's terms. `previous` lets a transient failure degrade to stale."""
+        document, failure = self._resolve_document(card)
+        if failure:
+            return self._failure(failure, previous, locator=card.get("termsUrl") or "not supplied")
+        return self.parse_document(document, card, previous)
+
+    def parse_document(self, document: TermsDocument, card: dict, previous: dict | None = None) -> dict:
+        """Extract from a document already in hand — a fetch, a paste, or an upload."""
+        try:
+            extraction = self.runtime.structured(EXTRACTION_PROMPT, ExtractionResult, document=document)
+        except ModelUnavailable as exc:
+            log.warning("Card intelligence model failure (%s): %s", exc.reason, exc.detail)
+            return self._failure(exc.reason, previous, locator=document.locator)
+
+        if not extraction.rules:
+            return self._failure("no_rules_found", previous, locator=document.locator, terminal=True)
+        if extraction.confidence < settings.extraction_min_confidence:
+            return self._failure("low_confidence", previous, locator=document.locator, terminal=True)
+
+        return self._success(extraction, document, card)
+
+    # ---------------------------------------------------------------- input --
+
+    def _resolve_document(self, card: dict) -> tuple[TermsDocument | None, str | None]:
+        if card.get("termsText"):
+            return document_from_text(card["termsText"]), None
+        url = (card.get("termsUrl") or "").strip()
+        if not url:
+            return None, "no_source"
+        if not url.lower().startswith(("http://", "https://")):
+            return None, "unsupported_content"
+        try:
+            return fetch_terms(url), None
+        except FetchError as exc:
+            log.warning("Card intelligence fetch failure (%s): %s", exc.reason, exc.detail)
+            return None, exc.reason
+
+    # --------------------------------------------------------------- output --
+
+    def _success(self, extraction: ExtractionResult, document: TermsDocument, card: dict) -> dict:
+        rules = []
+        for rule in extraction.rules:
+            data = rule.model_dump()
+            priced = spend_cap(data)
+            rules.append({
+                **data,
+                # `cap` means spend in the card's billing currency, always —
+                # a reward cap ("9,000 points a month") is divided back through
+                # the earn rate first. Everything downstream, interface included,
+                # can then treat it as dollars without asking what kind it is.
+                "cap": priced,
+                "capSpend": priced,
+                # The document's own figure, kept so provenance stays honest.
+                "capValue": data.get("cap"),
+                # Kept so existing consumers that render a string still work.
+                "rate": display_rate(data),
+                # The field every calculation should actually use.
+                "valuePerDollar": value_per_dollar(data),
+            })
+        rules.sort(key=lambda item: item["valuePerDollar"], reverse=True)
+
+        characteristics = extraction.characteristics.model_dump(exclude_none=True)
+        today = datetime.now(timezone.utc).date()
+        return {
+            "rules": rules,
+            "characteristics": characteristics,
+            "status": "parsed",
+            "confidence": round(extraction.confidence, 2),
+            "note": None,
+            "failureReason": None,
+            "source": {
+                "label": self._source_label(document),
+                "locator": document.locator,
+                "retrievedAt": today.isoformat(),
+            },
+            "recheckCadence": "weekly",
+            "nextRecheckAt": str(today + timedelta(days=7)),
+            "documentSummary": extraction.documentSummary,
+            # Prefer what the document says over what the form claimed.
+            "annualFee": characteristics.get("annualFee", card.get("annualFee")),
+        }
+
+    def _failure(self, reason: str, previous: dict | None, *, locator: str, terminal: bool = False) -> dict:
+        note = NOTES.get(reason, "The terms could not be read.")
+        keep = previous.get("rules") if previous else None
+        today = datetime.now(timezone.utc).date()
+
+        # Holding rules we already read beats dropping a working card because a
+        # single recheck failed.
+        if keep and not terminal and reason in TRANSIENT:
+            source = dict(previous.get("source") or {})
+            return {
+                "rules": keep,
+                "characteristics": previous.get("characteristics", {}),
+                "status": "stale",
+                "confidence": previous.get("confidence", 0.0),
+                "note": note,
+                "failureReason": reason,
+                "source": source or {"label": "Previously read terms", "locator": locator, "retrievedAt": str(today)},
+                "recheckCadence": "daily",
+                "nextRecheckAt": str(today + timedelta(days=1)),
+            }
+
+        return {
+            "rules": [],
+            "characteristics": {},
+            "status": "failed",
+            "confidence": 0.0,
+            "note": note,
+            "failureReason": reason,
+            "source": {"label": "Could not be read", "locator": locator, "retrievedAt": str(today)},
+            "recheckCadence": "weekly" if reason not in TRANSIENT else "daily",
+            "nextRecheckAt": str(today + timedelta(days=1 if reason in TRANSIENT else 7)),
+        }
+
+    def _source_label(self, document: TermsDocument) -> str:
+        if document.is_pdf:
+            return "Issuer terms PDF"
+        if document.locator == "pasted text":
+            return "Terms text you supplied"
+        return "Issuer terms page"
+
+    # ---------------------------------------------------------------- recheck --
+
+    def due_for_recheck(self, card: dict, today: date | None = None) -> bool:
+        due = card.get("nextRecheckAt")
+        if not due:
+            return True
+        return str(due) <= str(today or datetime.now(timezone.utc).date())
