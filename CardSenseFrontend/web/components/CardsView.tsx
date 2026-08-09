@@ -53,7 +53,28 @@ function Wallet({
                     {rule.cap
                       ? `${moneyIn(rule.cap, card.characteristics?.currency)} ${rule.cycleLabel}`
                       : rule.cycleLabel}
+                    {rule.mccCodes && rule.mccCodes.length > 0 && (
+                      <span className="rules__mcc">
+                        {" "}MCC {rule.mccCodes.slice(0, 4).join(", ")}
+                        {rule.mccCodes.length > 4 && ` +${rule.mccCodes.length - 4}`}
+                      </span>
+                    )}
                   </span>
+                  {/* The caveats that decide whether a headline rate is real. */}
+                  {rule.restrictions && rule.restrictions.length > 0 && (
+                    <span className="rules__limits">
+                      {rule.restrictions.map((limit) => (
+                        <span key={limit} className="limit">{limit}</span>
+                      ))}
+                    </span>
+                  )}
+                  {rule.hasRewardChoice && rule.alternativeRewards?.length ? (
+                    <span className="rules__alt">
+                      or {rule.alternativeRewards
+                        .map((alt) => `${alt.rateValue}${alt.rateUnit === "percent" ? "%" : "×"} ${alt.rewardCurrency ?? alt.rewardType}`)
+                        .join(", ")}
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -64,6 +85,19 @@ function Wallet({
           )}
 
           {card.parseNote && <p className="wcard__note">{card.parseNote}</p>}
+
+          {card.unresolved && card.unresolved.length > 0 && (
+            <details className="unresolved">
+              <summary className="unresolved__toggle">
+                {card.unresolved.length} thing{card.unresolved.length === 1 ? "" : "s"} the agent could not model
+              </summary>
+              <ul className="unresolved__list">
+                {card.unresolved.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </details>
+          )}
 
           <button
             type="button"

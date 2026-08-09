@@ -29,7 +29,24 @@ REWARD_UNIT_VALUES: dict[str, tuple[float, str]] = {
     "uni$": (0.019, "Placeholder: 1 UNI$ transfers to ~2 miles. Confirm."),
     "reward points": (0.0076, "Placeholder: ~2.5 HSBC points per mile. Confirm."),
     "ocbc$": (0.008, "Placeholder. Confirm against OCBC redemption tables."),
+    "yuu points": (0.01, "Placeholder: 100 yuu Points redeem for about S$1 at partners. Confirm."),
+    "linkpoints": (0.01, "Placeholder: ~100 LinkPoints per S$1. Confirm."),
 }
+
+
+# Two reward options on the same rule describe one reward paid two ways, so
+# they should price to roughly the same figure. A wide gap means either the
+# extraction misread a conversion or a programme is mispriced — both worth
+# saying out loud rather than quietly feeding into a recommendation.
+DIVERGENCE_TOLERANCE = 0.35
+
+
+def divergence(values: list[float]) -> float:
+    """How far apart the priced options are, as a fraction of the largest."""
+    priced = [v for v in values if v > 0]
+    if len(priced) < 2:
+        return 0.0
+    return (max(priced) - min(priced)) / max(priced)
 
 # Used when the document names no programme, or names one we do not price.
 DEFAULT_UNIT_VALUES: dict[str, tuple[float, str]] = {
