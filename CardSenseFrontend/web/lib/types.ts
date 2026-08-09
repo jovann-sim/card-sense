@@ -241,6 +241,28 @@ export interface ParsedRule {
   rewardUnitValueSource?: string;
   currency?: string;
   notes?: string | null;
+
+  /** Everything that narrows this rate, already phrased for display. */
+  restrictions?: string[];
+  /** Merchant category codes this rate applies to. Ranges like "3000-3299" allowed. */
+  mccCodes?: string[];
+  merchants?: string[];
+  channels?: string[];
+  exclusions?: string[];
+  conditions?: { kind: string; description: string; amount?: number | null }[];
+  tier?: "base" | "bonus" | "promotional";
+  requiresSelection?: boolean;
+  selectableCategories?: string[];
+  stacksWithBase?: boolean;
+  /** Set when the card pays in more than one currency and the holder picks. */
+  hasRewardChoice?: boolean;
+  alternativeRewards?: {
+    rewardType: string;
+    rewardCurrency?: string | null;
+    rateValue: number;
+    rateUnit: string;
+    valuePerDollar?: number;
+  }[];
 }
 
 export interface CardCharacteristics {
@@ -278,6 +300,9 @@ export interface CardDetail {
   characteristics?: CardCharacteristics;
   termsUrl?: string | null;
   documentSummary?: string | null;
+  currency?: string;
+  /** Structures the agent saw but could not model, plus anything inconsistent. */
+  unresolved?: string[];
 }
 
 /* ------------------------------------------------------------ catalog ----- */

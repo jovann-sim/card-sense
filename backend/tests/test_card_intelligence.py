@@ -22,12 +22,36 @@ class FakeRuntime:
 
 
 def rule(**kwargs):
+    """The flattened shape the pricing helpers operate on."""
     base = {
         "categoryLabel": "Dining", "rewardType": "cashback", "rateValue": 4.0,
         "rateUnit": "percent", "cap": None, "capType": None,
         "cycleLabel": "no cap", "minSpend": None, "notes": None,
     }
     return {**base, **kwargs}
+
+
+def extracted(**kwargs):
+    """The nested shape the model returns, with the rate inside `rewards`."""
+    flat = rule(**kwargs)
+    return {
+        "categoryLabel": flat["categoryLabel"],
+        "tier": kwargs.get("tier", "bonus"),
+        "cap": flat["cap"], "capType": flat["capType"],
+        "cycleLabel": flat["cycleLabel"], "minSpend": flat["minSpend"],
+        "mccCodes": kwargs.get("mccCodes", []),
+        "merchants": kwargs.get("merchants", []),
+        "channels": kwargs.get("channels", []),
+        "exclusions": kwargs.get("exclusions", []),
+        "conditions": kwargs.get("conditions", []),
+        "requiresSelection": kwargs.get("requiresSelection", False),
+        "selectableCategories": kwargs.get("selectableCategories", []),
+        "rewards": kwargs.get("rewards") or [{
+            "rewardType": flat["rewardType"], "rateValue": flat["rateValue"],
+            "rateUnit": flat["rateUnit"],
+            "rewardCurrency": kwargs.get("rewardCurrency"),
+        }],
+    }
 
 
 # -- pricing ----------------------------------------------------------------
@@ -96,7 +120,7 @@ def test_a_document_with_no_rates_fails_rather_than_guessing():
 
 
 def test_low_confidence_excludes_the_card():
-    extraction = ExtractionResult(rules=[rule()], confidence=0.1)
+    extraction = ExtractionResult(rules=[extracted()], confidence=0.1)
     agent = CardIntelligenceAgent(FakeRuntime(extraction))
     result = agent.parse({"name": "Card", "termsText": "Ambiguous copy."})
     assert result["status"] == "failed"
@@ -134,8 +158,8 @@ def test_a_document_with_no_rates_does_not_go_stale_even_with_history():
 def test_successful_extraction_prices_sorts_and_records_provenance():
     extraction = ExtractionResult(
         rules=[
-            rule(categoryLabel="Everything else", rateValue=0.3),
-            rule(categoryLabel="Dining", rateValue=5, cap=600, capType="spend", cycleLabel="per month"),
+            extracted(categoryLabel="Everything else", rateValue=0.3),
+            extracted(categoryLabel="Dining", rateValue=5, cap=600, capType="spend", cycleLabel="per month"),
         ],
         confidence=0.9,
     )
@@ -189,7 +213,7 @@ def test_strategy_allocates_against_the_spend_equivalent_cap():
 def test_a_reward_cap_is_republished_as_spend_on_the_rule():
     """The interface renders `cap` as money, so it must always be spend."""
     extraction = ExtractionResult(
-        rules=[rule(categoryLabel="Dining", rewardType="miles", rateValue=4,
+        rules=[extracted(categoryLabel="Dining", rewardType="miles", rateValue=4,
                     rateUnit="miles_per_dollar", cap=3600, capType="reward",
                     cycleLabel="per month")],
         confidence=0.9,
@@ -246,7 +270,7 @@ def test_cashback_is_never_repriced():
 def test_extraction_records_currency_and_unit_price_on_every_rule():
     from app.agents.schema import ExtractedCharacteristics
     extraction = ExtractionResult(
-        rules=[rule(rewardType="miles", rateValue=1.2, rateUnit="miles_per_dollar")],
+        rules=[extracted(rewardType="miles", rateValue=1.2, rateUnit="miles_per_dollar")],
         characteristics=ExtractedCharacteristics(currency="SGD", rewardCurrency="KrisFlyer miles"),
         confidence=0.9,
     )
@@ -262,10 +286,104 @@ def test_a_usd_card_keeps_its_own_currency():
     """A USD card is labelled, not silently converted at an invented rate."""
     from app.agents.schema import ExtractedCharacteristics
     extraction = ExtractionResult(
-        rules=[rule(rateValue=2, rateUnit="percent")],
+        rules=[extracted(rateValue=2, rateUnit="percent")],
         characteristics=ExtractedCharacteristics(currency="USD"),
         confidence=0.9,
     )
     parsed = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})
     assert parsed["currency"] == "USD"
     assert parsed["rules"][0]["currency"] == "USD"
+
+
+# -- complex reward structures ---------------------------------------------
+
+def test_a_card_offering_a_choice_pays_in_the_holders_chosen_currency():
+    """DBS yuu pays in yuu Points or cash back. The holder's track decides."""
+    extraction = ExtractionResult(rules=[extracted(rewards=[
+        {"rewardType": "cashback", "rateValue": 18, "rateUnit": "percent", "rewardCurrency": None},
+        {"rewardType": "points", "rateValue": 18, "rateUnit": "points_per_dollar", "rewardCurrency": "yuu Points"},
+    ])], confidence=0.9)
+
+    cash = CardIntelligenceAgent(FakeRuntime(extraction)).parse(
+        {"name": "yuu", "track": "cashback", "termsText": "..."})["rules"][0]
+    points = CardIntelligenceAgent(FakeRuntime(extraction)).parse(
+        {"name": "yuu", "track": "points", "termsText": "..."})["rules"][0]
+
+    assert cash["rewardType"] == "cashback"
+    assert points["rewardType"] == "points"
+    assert cash["hasRewardChoice"] and points["hasRewardChoice"]
+    # Each keeps the road not taken visible.
+    assert cash["alternativeRewards"][0]["rewardType"] == "points"
+
+
+def test_reward_options_that_price_far_apart_are_flagged():
+    """Two ways of paying the same reward should not value 10x differently."""
+    extraction = ExtractionResult(rules=[extracted(rewards=[
+        {"rewardType": "cashback", "rateValue": 5, "rateUnit": "percent", "rewardCurrency": None},
+        {"rewardType": "points", "rateValue": 50, "rateUnit": "points_per_dollar", "rewardCurrency": "Mystery Points"},
+    ])], confidence=0.9)
+    result = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})
+    assert any("price" in note for note in result["unresolved"])
+
+
+def test_a_merchant_scoped_rate_says_so():
+    """4% at three named shops is not 4% on a category."""
+    extraction = ExtractionResult(rules=[extracted(
+        merchants=["Cold Storage", "Giant", "Guardian"], minSpend=600,
+    )], confidence=0.9)
+    row = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})["rules"][0]
+    assert any("only at Cold Storage" in r for r in row["restrictions"])
+    assert any("minimum spend" in r for r in row["restrictions"])
+
+
+def test_a_nominated_category_rate_is_marked_conditional():
+    extraction = ExtractionResult(rules=[extracted(
+        requiresSelection=True, selectableCategories=["Dining", "Travel"],
+        conditions=[{"kind": "banking_relationship", "description": "Requires a UOB One Account.",
+                     "amount": None, "cycleLabel": "no cap"}],
+    )], confidence=0.9)
+    row = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})["rules"][0]
+    assert row["requiresSelection"] is True
+    assert "you must nominate this category" in row["restrictions"]
+    assert StrategyAgent().unmet_conditions(row) == ["Requires a UOB One Account."]
+
+
+def test_unresolved_structures_are_reported_not_dropped():
+    extraction = ExtractionResult(
+        rules=[extracted()], confidence=0.9,
+        unresolved=["Solitaire cardmembers may nominate two categories."],
+    )
+    result = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})
+    assert "Solitaire cardmembers may nominate two categories." in result["unresolved"]
+
+
+# -- mcc matching -----------------------------------------------------------
+
+def test_strategy_matches_on_mcc_before_label():
+    """4121 is unambiguous; "Travel" and "Transport" are not."""
+    strategy = StrategyAgent()
+    transit = {"categoryLabel": "Rideshare", "mccCodes": ["4121"], "valuePerDollar": 0.04}
+    assert strategy._matches(transit, "anything at all", mcc="4121")
+    assert not strategy._matches(transit, "anything at all", mcc="5812")
+
+
+def test_mcc_ranges_are_understood():
+    strategy = StrategyAgent()
+    air = {"categoryLabel": "Air travel", "mccCodes": ["3000-3299", "4511"]}
+    assert strategy._matches(air, "", mcc="3100")
+    assert strategy._matches(air, "", mcc="4511")
+    assert not strategy._matches(air, "", mcc="5411")
+
+
+def test_the_base_rate_matches_any_spending():
+    strategy = StrategyAgent()
+    base = {"categoryLabel": "Everything else", "mccCodes": []}
+    assert strategy._matches(base, "groceries")
+    assert strategy._matches(base, "anything")
+
+
+def test_label_matching_still_works_without_codes():
+    strategy = StrategyAgent()
+    dining = {"categoryLabel": "Dining", "mccCodes": []}
+    assert strategy._matches(dining, "Dining")
+    assert not strategy._matches(dining, "Fuel")

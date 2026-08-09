@@ -5,11 +5,13 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..config import settings
 from .runtime import ModelUnavailable
-from ..valuations import BASE_CURRENCY, unit_value
+from ..valuations import BASE_CURRENCY, DIVERGENCE_TOLERANCE, divergence, unit_value
 from .schema import (
     EXTRACTION_PROMPT,
     ExtractionResult,
+    choose_reward,
     display_rate,
+    option_value,
     spend_cap,
     value_per_dollar,
 )
@@ -31,6 +33,52 @@ NOTES = {
     "low_confidence": "The rates could not be read confidently, so this card is excluded rather than guessed at.",
     "no_source": "No terms link or text was supplied, so there is nothing to read.",
 }
+
+
+CHANNEL_WORDS = {
+    "online": "online only",
+    "in_store": "in store only",
+    "contactless": "contactless only",
+    "foreign_currency": "foreign currency only",
+}
+
+CONDITION_WORDS = {
+    "minimum_spend": "minimum spend",
+    "enrolment": "enrolment required",
+    "category_selection": "you choose the category",
+    "banking_relationship": "requires a linked account",
+    "new_customer": "new customers only",
+    "promotional_period": "time-limited",
+    "spend_elsewhere": "requires spend elsewhere",
+}
+
+
+def _restrictions(rule: dict) -> list[str]:
+    """Short phrases naming everything that narrows a rate.
+
+    Collected here so the interface can show why a headline number will not
+    apply to most of a user's spending — the difference between "4% on dining"
+    and "4% at three named restaurants, if you enrol".
+    """
+    out: list[str] = []
+    if rule.get("merchants"):
+        named = ", ".join(rule["merchants"][:4])
+        more = len(rule["merchants"]) - 4
+        out.append(f"only at {named}{f' and {more} more' if more > 0 else ''}")
+    for channel in rule.get("channels") or []:
+        if channel in CHANNEL_WORDS:
+            out.append(CHANNEL_WORDS[channel])
+    if rule.get("requiresSelection"):
+        out.append("you must nominate this category")
+    if rule.get("minSpend"):
+        out.append(f"minimum spend {rule['minSpend']:,.0f}")
+    for condition in rule.get("conditions") or []:
+        label = CONDITION_WORDS.get(condition.get("kind", ""), None)
+        if label and label not in out:
+            out.append(label)
+    if rule.get("exclusions"):
+        out.append(f"{len(rule['exclusions'])} exclusion{'s' if len(rule['exclusions']) > 1 else ''}")
+    return out
 
 
 class CardIntelligenceAgent:
@@ -93,13 +141,46 @@ class CardIntelligenceAgent:
         # applying an FX rate we invented would be worse than saying "this is USD".
         currency = (characteristics.get("currency") or BASE_CURRENCY).upper()
 
+        track = card.get("track")
+        warnings: list[str] = []
         rules = []
         for rule in extraction.rules:
             data = rule.model_dump()
+
+            # A card may pay in more than one currency. Which one is real
+            # depends on what this holder said they are collecting.
+            chosen = choose_reward(data.get("rewards"), track)
+            if chosen:
+                data["rewardType"] = chosen["rewardType"]
+                data["rateValue"] = chosen["rateValue"]
+                data["rateUnit"] = chosen["rateUnit"]
+                data["rewardCurrency"] = chosen.get("rewardCurrency") or programme
+            rule_programme = data.get("rewardCurrency") or programme
+
             priced = spend_cap(data)
-            unit_priced, unit_source = unit_value(programme, data.get("rewardType", "cashback"))
+            unit_priced, unit_source = unit_value(rule_programme, data.get("rewardType", "cashback"))
+            alternatives = [
+                {**option, "valuePerDollar": option_value(option)}
+                for option in (data.get("rewards") or [])
+                if chosen is None or option != chosen
+            ]
+
+            # Same reward, two currencies: if they do not price alike, one of
+            # the valuations or the conversion has been misread.
+            option_values = [option_value(o) for o in (data.get("rewards") or [])]
+            spread = divergence(option_values)
+            if spread > DIVERGENCE_TOLERANCE:
+                warnings.append(
+                    f"{data['categoryLabel']}: the reward options price {spread:.0%} apart "
+                    f"({', '.join(f'{v:.3f}' for v in sorted(option_values))} per dollar). "
+                    "One of the conversions or programme valuations is likely wrong."
+                )
             rules.append({
                 **data,
+                "alternativeRewards": alternatives,
+                "hasRewardChoice": len(data.get("rewards") or []) > 1,
+                # Everything a rate depends on, in one place the UI can read.
+                "restrictions": _restrictions(data),
                 # `cap` means spend in the card's billing currency, always —
                 # a reward cap ("9,000 points a month") is divided back through
                 # the earn rate first. Everything downstream, interface included,
@@ -112,8 +193,8 @@ class CardIntelligenceAgent:
                 "rate": display_rate(data),
                 # The field every calculation should actually use, priced
                 # through this card's own programme rather than a flat rate.
-                "valuePerDollar": value_per_dollar(data, programme),
-                "rewardCurrency": programme,
+                "valuePerDollar": value_per_dollar(data, rule_programme),
+                "rewardCurrency": rule_programme,
                 "rewardUnitValue": unit_priced,
                 "rewardUnitValueSource": unit_source,
                 "currency": currency,
@@ -137,6 +218,10 @@ class CardIntelligenceAgent:
             "nextRecheckAt": str(today + timedelta(days=7)),
             "documentSummary": extraction.documentSummary,
             "currency": currency,
+            # Structures the model saw but could not express, plus anything
+            # that did not add up. Surfaced rather than dropped, because a
+            # known gap beats a silent wrong number.
+            "unresolved": [*extraction.unresolved, *warnings],
             # Prefer what the document says over what the form claimed.
             "annualFee": characteristics.get("annualFee", card.get("annualFee")),
         }
