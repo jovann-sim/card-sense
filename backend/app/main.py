@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import csv
 import io
+import re
 import uuid
 import logging
 from time import perf_counter
@@ -237,7 +238,9 @@ def resolve_advice(advice_id: str, body: AdviceResolveIn):
 
 
 def _card_id(name: str, network: str) -> str:
-    return f"{network.lower()}-{name.lower().replace(' ', '-')}"
+    """A URL-safe, stable id. Spaces here end up in route paths and break them."""
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{network} {name}".lower()).strip("-")
+    return slug or "card"
 
 
 def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
