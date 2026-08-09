@@ -28,7 +28,9 @@ class StrategyAgent:
             # Allocate category spend through cap headroom, then to the next rate.
             remaining = spend
             for rate, card, rule in candidates:
-                cap = rule.get("cap")
+                # capSpend normalises a reward cap ("up to $60 cashback") into
+                # the spend that reaches it, which is what is being allocated.
+                cap = rule.get("capSpend", rule.get("cap")) if isinstance(rule, dict) else None
                 headroom = remaining if cap is None else max(0.0, float(cap) - cap_spend[(card["name"], rule.get("cycleLabel", ""))])
                 allocated = min(remaining, headroom)
                 optimal += allocated * rate
@@ -90,10 +92,21 @@ class StrategyAgent:
             for rule in rules.get(card.get("cardId"), []):
                 label = rule.get("categoryLabel", "").lower()
                 if category.lower() in label or label in category.lower():
-                    candidates.append((self._rate(rule.get("rate"), card.get("track")), card, rule))
+                    candidates.append((self._rate(rule, card.get("track")), card, rule))
         return sorted(candidates, key=lambda item: item[0], reverse=True)
 
-    def _rate(self, raw, track):
+    def _rate(self, rule, track):
+        """Nominal dollars returned per dollar spent.
+
+        Card intelligence now supplies this directly as valuePerDollar, priced
+        through the reward currency at extraction time. The regex below is a
+        fallback for rules recorded before that field existed — it reads a
+        display string like "4% cash back", which is guesswork by comparison.
+        """
+        if isinstance(rule, dict) and rule.get("valuePerDollar") is not None:
+            return float(rule["valuePerDollar"])
+
+        raw = rule.get("rate") if isinstance(rule, dict) else rule
         match = re.search(r"(\d+(?:\.\d+)?)", str(raw))
         if not match:
             return 0.01
