@@ -244,6 +244,40 @@ export function CardsView({
   const [requestError, setRequestError] = useState<string | null>(null);
   const router = useRouter();
 
+  const visibleCatalog = useMemo(() => {
+    const heldNames = new Set(wallet.map((card) => card.name.toLowerCase()));
+    const rows = catalog.map((card) => ({
+      ...card,
+      held: heldNames.has(card.name.toLowerCase()),
+    }));
+    const catalogNames = new Set(rows.map((card) => card.name.toLowerCase()));
+
+    for (const card of wallet) {
+      if (catalogNames.has(card.name.toLowerCase())) continue;
+      const headlineRate = card.rules
+        .slice(0, 2)
+        .map((rule) => `${rule.rate} ${rule.categoryLabel.toLowerCase()}`)
+        .join(", ") || "Rules not yet readable";
+      const tags = [
+        ...card.rules.map((rule) => rule.categoryLabel.toLowerCase()),
+        card.track,
+        ...(card.annualFee === 0 ? ["no annual fee"] : []),
+      ];
+      rows.push({
+        name: card.name,
+        network: card.network,
+        headlineRate,
+        annualFee: card.annualFee,
+        track: card.track,
+        held: true,
+        deltaVsWallet: 0,
+        ...(card.parseNote ? { deltaNote: card.parseNote } : {}),
+        tags: [...new Set(tags)],
+      });
+    }
+    return rows;
+  }, [catalog, wallet]);
+
   function openAdd() {
     setManualFor(null);
     setAdding(true);
@@ -272,7 +306,10 @@ export function CardsView({
 
   async function saveCard(card: CardDetail) {
     try {
-      await api("/api/v1/cards", {
+      const result = await api<{
+        card: CardDetail;
+        snapshot: { wallet: CardDetail[] };
+      }>("/api/v1/cards", {
         method: "POST",
         body: JSON.stringify({
           name: card.name, last4: card.last4, network: card.network,
@@ -280,6 +317,7 @@ export function CardsView({
           rules: card.rules,
         }),
       });
+      setWallet(result.snapshot.wallet);
       setAdding(false);
       setManualFor(null);
       router.refresh();
@@ -328,7 +366,7 @@ export function CardsView({
           onClick={() => setTab("catalog")}
         >
           All cards
-          <span className="tabs__count">{catalog.length}</span>
+          <span className="tabs__count">{visibleCatalog.length}</span>
         </button>
 
         {!showFlow && (
@@ -363,7 +401,7 @@ export function CardsView({
           onRemove={removeCard}
         />
       ) : (
-        <Catalog catalog={catalog} onAddRequest={openAdd} />
+        <Catalog catalog={visibleCatalog} onAddRequest={openAdd} />
       )}
     </>
   );

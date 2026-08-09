@@ -28,7 +28,13 @@ export default async function CardsPage() {
       </section>
 
       <div className="shell section">
-        <CardsView wallet={snapshot.wallet} catalog={snapshot.catalog} />
+        <CardsView
+          key={snapshot.wallet
+            .map((card) => card.walletId ?? card.id ?? card.cardId ?? `${card.name}-${card.last4}`)
+            .join("|")}
+          wallet={snapshot.wallet}
+          catalog={snapshot.catalog}
+        />
       </div>
     </main>
   );

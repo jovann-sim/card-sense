@@ -288,6 +288,7 @@ export interface CollectionLink {
 /* ----------------------------------------------------------- snapshot ----- */
 
 export interface Snapshot {
+  readModelVersion?: number;
   generatedAt: ISODate;
   period: Period;
   totals: Totals;

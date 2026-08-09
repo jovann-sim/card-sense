@@ -75,6 +75,7 @@ class AgentRun(BaseModel):
 
 
 class Snapshot(BaseModel):
+    readModelVersion: int = 2
     generatedAt: str
     period: dict[str, Any]
     totals: dict[str, float]
