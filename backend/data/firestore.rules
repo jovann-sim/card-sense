@@ -1,0 +1,20 @@
+// Firestore rules: clients may read the public snapshot only through your
+// preferred authenticated web-server pattern. Sensitive Plaid credentials are
+// never readable from the browser.
+// Deploy with Firebase/Firestore tooling after adapting auth to your project.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/plaid_items/{itemId} {
+      allow read, write: if false;
+    }
+    match /users/{uid}/snapshots/{snapshotId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
