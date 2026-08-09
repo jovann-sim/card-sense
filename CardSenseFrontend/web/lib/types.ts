@@ -221,9 +221,58 @@ export interface TrackRecord {
 
 export interface ParsedRule {
   categoryLabel: string;
+  /** Display string only. Never calculate from this — use valuePerDollar. */
   rate: string;
+  /** Always spend, in the card's currency. A reward cap is converted first. */
   cap: number | null;
   cycleLabel: string;
+  /** Nominal currency returned per dollar spent, priced by programme. */
+  valuePerDollar?: number;
+  rewardType?: "cashback" | "points" | "miles";
+  rateValue?: number;
+  rateUnit?: "percent" | "points_per_dollar" | "miles_per_dollar";
+  capType?: "spend" | "reward" | null;
+  /** The figure the document itself stated, before conversion to spend. */
+  capValue?: number | null;
+  minSpend?: number | null;
+  rewardCurrency?: string | null;
+  /** What one point or mile of this programme is assumed to be worth. */
+  rewardUnitValue?: number;
+  rewardUnitValueSource?: string;
+  currency?: string;
+  notes?: string | null;
+
+  /** Everything that narrows this rate, already phrased for display. */
+  restrictions?: string[];
+  /** Merchant category codes this rate applies to. Ranges like "3000-3299" allowed. */
+  mccCodes?: string[];
+  merchants?: string[];
+  channels?: string[];
+  exclusions?: string[];
+  conditions?: { kind: string; description: string; amount?: number | null }[];
+  tier?: "base" | "bonus" | "promotional";
+  requiresSelection?: boolean;
+  selectableCategories?: string[];
+  stacksWithBase?: boolean;
+  /** Set when the card pays in more than one currency and the holder picks. */
+  hasRewardChoice?: boolean;
+  alternativeRewards?: {
+    rewardType: string;
+    rewardCurrency?: string | null;
+    rateValue: number;
+    rateUnit: string;
+    valuePerDollar?: number;
+  }[];
+}
+
+export interface CardCharacteristics {
+  issuer?: string;
+  currency?: string;
+  rewardCurrency?: string;
+  annualFee?: number;
+  feeWaiverSpend?: number;
+  minIncome?: number;
+  foreignTxFeePct?: number;
 }
 
 export type ParseStatus = "parsed" | "failed" | "stale";
@@ -246,6 +295,14 @@ export interface CardDetail {
   nextRecheckAt: ISODate;
   parseStatus: ParseStatus;
   parseNote?: string;
+  parseConfidence?: number;
+  failureReason?: string | null;
+  characteristics?: CardCharacteristics;
+  termsUrl?: string | null;
+  documentSummary?: string | null;
+  currency?: string;
+  /** Structures the agent saw but could not model, plus anything inconsistent. */
+  unresolved?: string[];
 }
 
 /* ------------------------------------------------------------ catalog ----- */

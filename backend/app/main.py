@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import csv
 import io
+import re
 import uuid
 import logging
 from time import perf_counter
@@ -10,6 +11,8 @@ from time import perf_counter
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
+from .agents.terms import document_from_upload
+from .valuations import BASE_CURRENCY
 from .config import settings
 from .store import store
 from .models import (
@@ -235,35 +238,107 @@ def resolve_advice(advice_id: str, body: AdviceResolveIn):
     return snap
 
 
-@app.post("/api/v1/cards", response_model=CardResponse)
-def add_card(body: CardIn):
-    card = body.model_dump(mode="json")
-    parsed = {"rules": card.get("rules") or [], "status": "parsed" if card.get("rules") else "failed", "note": None}
-    if not parsed["rules"]:
-        parsed = orch.cardintel.parse(card)
-    card_id = f"{card['network'].lower()}-{card['name'].lower().replace(' ', '-') }"
+def _card_id(name: str, network: str) -> str:
+    """A URL-safe, stable id. Spaces here end up in route paths and break them."""
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{network} {name}".lower()).strip("-")
+    return slug or "card"
+
+
+def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
+    """Fold an extraction result into the wallet document and the global rules.
+
+    Provenance, cadence and the failure reason all come from the agent now — the
+    API no longer invents a source label or a recheck date the agent never set.
+    """
     card_detail = {
         "name": card["name"],
         "last4": card["last4"],
         "network": card["network"],
-        "annualFee": card["annualFee"],
+        "annualFee": parsed.get("annualFee") if parsed.get("annualFee") is not None else card.get("annualFee", 0),
         "track": card["track"],
         "cardId": card_id,
         "accountId": card.get("accountId"),
         "rules": parsed.get("rules", []),
-        "source": {
-            "label": "User supplied terms",
-            "locator": card.get("termsUrl") or "uploaded terms",
-            "retrievedAt": datetime.now(timezone.utc).date().isoformat(),
-        },
-        "recheckCadence": "weekly",
-        "nextRecheckAt": str(datetime.now(timezone.utc).date()),
+        "characteristics": parsed.get("characteristics", {}),
+        # The card's own billing currency. Rendered rather than converted.
+        "currency": parsed.get("currency", BASE_CURRENCY),
+        "source": parsed["source"],
+        "recheckCadence": parsed.get("recheckCadence", "weekly"),
+        "nextRecheckAt": parsed.get("nextRecheckAt", str(datetime.now(timezone.utc).date())),
         "parseStatus": parsed.get("status", "failed"),
         "parseNote": parsed.get("note"),
+        "parseConfidence": parsed.get("confidence", 0.0),
+        "failureReason": parsed.get("failureReason"),
+        "termsUrl": card.get("termsUrl"),
     }
-    store.set_global_doc("card_rules", card_id, {"rules": parsed.get("rules", []), "source": card_detail["source"], "status": card_detail["parseStatus"]})
+    if parsed.get("documentSummary"):
+        card_detail["documentSummary"] = parsed["documentSummary"]
+
+    store.set_global_doc("card_rules", card_id, {
+        "rules": parsed.get("rules", []),
+        "characteristics": parsed.get("characteristics", {}),
+        "source": parsed["source"],
+        "status": card_detail["parseStatus"],
+        "confidence": card_detail["parseConfidence"],
+    })
     store.set_subdoc(UID, "wallet", card_id, card_detail)
+    return card_detail
+
+
+@app.post("/api/v1/cards", response_model=CardResponse)
+def add_card(body: CardIn):
+    card = body.model_dump(mode="json")
+    card_id = _card_id(card["name"], card["network"])
+
+    if card.get("rules"):
+        # Rates the user typed or corrected by hand are authoritative.
+        today = datetime.now(timezone.utc).date()
+        parsed = {
+            "rules": card["rules"], "characteristics": {}, "status": "parsed",
+            "confidence": 1.0, "note": None, "failureReason": None,
+            "source": {"label": "Entered by you", "locator": card.get("termsUrl") or "entered by hand", "retrievedAt": today.isoformat()},
+            "recheckCadence": "not rechecked", "nextRecheckAt": str(today + timedelta(days=3650)),
+        }
+    else:
+        previous = store.get_global_doc("card_rules", card_id)
+        parsed = orch.cardintel.parse(card, previous)
+
+    card_detail = _apply_parse(card, card_id, parsed)
     _, snap = orch.run(UID, "Recalculate after card added")
+    return {"card": card_detail, "snapshot": snap}
+
+
+@app.post("/api/v1/cards/{card_id}/recheck", response_model=CardResponse)
+def recheck_card(card_id: str):
+    """Re-read a card's terms on demand — what the 'recheck now' control calls."""
+    card = store.get_subdoc(UID, "wallet", card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    if not card.get("termsUrl"):
+        raise HTTPException(status_code=400, detail="This card has no terms link to reread.")
+
+    previous = store.get_global_doc("card_rules", card_id)
+    parsed = orch.cardintel.parse({**card, "rules": None}, previous)
+    card_detail = _apply_parse({**card, "termsUrl": card.get("termsUrl")}, card_id, parsed)
+    _, snap = orch.run(UID, "Recalculate after terms recheck")
+    return {"card": card_detail, "snapshot": snap}
+
+
+@app.post("/api/v1/cards/{card_id}/terms", response_model=CardResponse)
+async def upload_terms(card_id: str, file: UploadFile = File(...)):
+    """Read a terms document the user has on disk rather than one we can fetch."""
+    card = store.get_subdoc(UID, "wallet", card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="The uploaded file was empty.")
+
+    document = document_from_upload(payload, file.filename or "uploaded terms")
+    parsed = orch.cardintel.parse_document(document, card)
+    card_detail = _apply_parse(card, card_id, parsed)
+    _, snap = orch.run(UID, "Recalculate after terms upload")
     return {"card": card_detail, "snapshot": snap}
 
 

@@ -10,19 +10,46 @@
  */
 const DISPLAY_TZ = "America/New_York";
 
-const usd = new Intl.NumberFormat("en-US", {
+/**
+ * Singapore dollars are the base currency. A card whose own terms are
+ * denominated elsewhere keeps its currency and is labelled — see moneyIn —
+ * rather than being converted at a rate nobody chose.
+ */
+export const BASE_CURRENCY = "SGD";
+const LOCALE = "en-SG";
+
+const base = new Intl.NumberFormat(LOCALE, {
   style: "currency",
-  currency: "USD",
+  currency: BASE_CURRENCY,
   minimumFractionDigits: 2,
 });
 
-const usdWhole = new Intl.NumberFormat("en-US", {
+const baseWhole = new Intl.NumberFormat(LOCALE, {
   style: "currency",
-  currency: "USD",
+  currency: BASE_CURRENCY,
   maximumFractionDigits: 0,
 });
 
-const units = new Intl.NumberFormat("en-US");
+const byCurrency = new Map<string, Intl.NumberFormat>();
+
+/** Format in a card's own currency, always showing which one it is. */
+export function moneyIn(amount: number, currency?: string | null): string {
+  const code = (currency || BASE_CURRENCY).toUpperCase();
+  if (code === BASE_CURRENCY) return base.format(amount);
+  let formatter = byCurrency.get(code);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(LOCALE, {
+      style: "currency",
+      currency: code,
+      currencyDisplay: "code",
+      minimumFractionDigits: 2,
+    });
+    byCurrency.set(code, formatter);
+  }
+  return formatter.format(amount);
+}
+
+const units = new Intl.NumberFormat(LOCALE);
 
 /**
  * Calendar dates in the fixtures are date-only ("2026-08-19"), which parses as
@@ -48,8 +75,8 @@ const longDayFmt = new Intl.DateTimeFormat("en-US", {
   timeZone: DISPLAY_TZ,
 });
 
-export const money = (n: number) => usd.format(n);
-export const moneyWhole = (n: number) => usdWhole.format(n);
+export const money = (n: number) => base.format(n);
+export const moneyWhole = (n: number) => baseWhole.format(n);
 export const count = (n: number) => units.format(n);
 
 export const pct = (n: number, of: number) =>
