@@ -37,9 +37,11 @@ def test_percentage_prices_as_a_fraction_of_the_dollar():
 
 
 def test_miles_price_through_the_reward_currency():
-    # 1.4 miles per dollar at $0.013 a mile returns $0.0182 per dollar spent.
+    """An unnamed programme falls back to the default miles valuation."""
+    from app.valuations import DEFAULT_UNIT_VALUES
+    default, _ = DEFAULT_UNIT_VALUES["miles"]
     priced = value_per_dollar(rule(rewardType="miles", rateValue=1.4, rateUnit="miles_per_dollar"))
-    assert priced == pytest.approx(0.0182)
+    assert priced == pytest.approx(1.4 * default)
 
 
 def test_points_price_through_the_reward_currency():
@@ -197,3 +199,73 @@ def test_a_reward_cap_is_republished_as_spend_on_the_rule():
     assert parsed["cap"] == 900.0
     assert parsed["capValue"] == 3600.0
     assert parsed["capType"] == "reward"
+
+
+# -- per-programme valuation and currency ----------------------------------
+
+def test_programmes_are_priced_individually_not_by_reward_type():
+    """KrisFlyer miles and an unrecognised programme must not price the same."""
+    from app.valuations import unit_value
+    kris, _ = unit_value("KrisFlyer miles", "miles")
+    amex, _ = unit_value("Membership Rewards", "points")
+    unknown, _ = unit_value("Some Unlisted Programme", "miles")
+    assert kris != unknown
+    assert amex != kris
+    assert kris > 0 and amex > 0
+
+
+def test_programme_names_match_loosely():
+    from app.valuations import unit_value
+    exact, _ = unit_value("Reward points", "points")
+    prefixed, _ = unit_value("HSBC Reward points", "points")
+    assert exact == prefixed
+
+
+def test_every_valuation_states_its_reasoning():
+    """These are assumptions, so each must carry a source the UI can show."""
+    from app.valuations import REWARD_UNIT_VALUES, DEFAULT_UNIT_VALUES
+    for value, source in list(REWARD_UNIT_VALUES.values()) + list(DEFAULT_UNIT_VALUES.values()):
+        assert value > 0
+        assert source.strip()
+
+
+def test_value_per_dollar_uses_the_named_programme():
+    from app.valuations import unit_value
+    kris, _ = unit_value("KrisFlyer miles", "miles")
+    priced = value_per_dollar(
+        rule(rewardType="miles", rateValue=1.2, rateUnit="miles_per_dollar"),
+        "KrisFlyer miles",
+    )
+    assert priced == pytest.approx(1.2 * kris)
+
+
+def test_cashback_is_never_repriced():
+    assert value_per_dollar(rule(rateValue=5, rateUnit="percent"), "Anything") == 0.05
+
+
+def test_extraction_records_currency_and_unit_price_on_every_rule():
+    from app.agents.schema import ExtractedCharacteristics
+    extraction = ExtractionResult(
+        rules=[rule(rewardType="miles", rateValue=1.2, rateUnit="miles_per_dollar")],
+        characteristics=ExtractedCharacteristics(currency="SGD", rewardCurrency="KrisFlyer miles"),
+        confidence=0.9,
+    )
+    parsed = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})
+    row = parsed["rules"][0]
+    assert row["currency"] == "SGD"
+    assert row["rewardCurrency"] == "KrisFlyer miles"
+    assert row["rewardUnitValue"] > 0
+    assert row["rewardUnitValueSource"]
+
+
+def test_a_usd_card_keeps_its_own_currency():
+    """A USD card is labelled, not silently converted at an invented rate."""
+    from app.agents.schema import ExtractedCharacteristics
+    extraction = ExtractionResult(
+        rules=[rule(rateValue=2, rateUnit="percent")],
+        characteristics=ExtractedCharacteristics(currency="USD"),
+        confidence=0.9,
+    )
+    parsed = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})
+    assert parsed["currency"] == "USD"
+    assert parsed["rules"][0]["currency"] == "USD"
