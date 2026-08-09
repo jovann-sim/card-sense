@@ -2535,3 +2535,62 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------- rule scope and caveats ------- */
+
+.rules__mcc {
+  color: var(--slate-soft);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+}
+
+/* A headline rate means little without what narrows it, so the caveats sit
+   directly beneath the number rather than behind a disclosure. */
+.rules__limits {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+}
+
+.limit {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.35rem;
+  border-radius: 2px;
+  color: var(--ember);
+  background: var(--ember-wash);
+  border: 1px solid var(--ember);
+}
+
+.rules__alt {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--brass-deep);
+  margin-top: 0.2rem;
+}
+
+.unresolved {
+  margin-bottom: 0.875rem;
+  border-left: 2px solid var(--brass);
+  padding-left: 0.75rem;
+}
+
+.unresolved__toggle {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--brass-deep);
+  cursor: pointer;
+}
+
+.unresolved__list {
+  margin: 0.5rem 0 0 1rem;
+  font-size: 0.75rem;
+  color: var(--slate);
+}

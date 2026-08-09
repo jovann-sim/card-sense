@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CardDetail, CatalogCard, ParseStatus } from "@/lib/types";
-import { dayMonth, money } from "@/lib/format";
+import { dayMonth, money, moneyIn } from "@/lib/format";
 import { api } from "@/lib/client-api";
 import { AddCardFlow } from "./AddCardFlow";
 
@@ -37,7 +37,7 @@ function Wallet({
                 {card.network} · ••{card.last4} ·{" "}
                 {card.annualFee === 0
                   ? "no annual fee"
-                  : `${money(card.annualFee)} a year`}
+                  : `${moneyIn(card.annualFee, card.characteristics?.currency)} a year`}
               </p>
             </div>
             <span className="wcard__parse">{PARSE_LABEL[card.parseStatus]}</span>
@@ -51,9 +51,30 @@ function Wallet({
                   <span className="rules__rate num">{rule.rate}</span>
                   <span className="rules__cap num">
                     {rule.cap
-                      ? `${money(rule.cap)} ${rule.cycleLabel}`
+                      ? `${moneyIn(rule.cap, card.characteristics?.currency)} ${rule.cycleLabel}`
                       : rule.cycleLabel}
+                    {rule.mccCodes && rule.mccCodes.length > 0 && (
+                      <span className="rules__mcc">
+                        {" "}MCC {rule.mccCodes.slice(0, 4).join(", ")}
+                        {rule.mccCodes.length > 4 && ` +${rule.mccCodes.length - 4}`}
+                      </span>
+                    )}
                   </span>
+                  {/* The caveats that decide whether a headline rate is real. */}
+                  {rule.restrictions && rule.restrictions.length > 0 && (
+                    <span className="rules__limits">
+                      {rule.restrictions.map((limit) => (
+                        <span key={limit} className="limit">{limit}</span>
+                      ))}
+                    </span>
+                  )}
+                  {rule.hasRewardChoice && rule.alternativeRewards?.length ? (
+                    <span className="rules__alt">
+                      or {rule.alternativeRewards
+                        .map((alt) => `${alt.rateValue}${alt.rateUnit === "percent" ? "%" : "×"} ${alt.rewardCurrency ?? alt.rewardType}`)
+                        .join(", ")}
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -64,6 +85,19 @@ function Wallet({
           )}
 
           {card.parseNote && <p className="wcard__note">{card.parseNote}</p>}
+
+          {card.unresolved && card.unresolved.length > 0 && (
+            <details className="unresolved">
+              <summary className="unresolved__toggle">
+                {card.unresolved.length} thing{card.unresolved.length === 1 ? "" : "s"} the agent could not model
+              </summary>
+              <ul className="unresolved__list">
+                {card.unresolved.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </details>
+          )}
 
           <button
             type="button"
@@ -304,28 +338,6 @@ export function CardsView({
     }, 1_200);
   }
 
-  async function saveCard(card: CardDetail) {
-    try {
-      const result = await api<{
-        card: CardDetail;
-        snapshot: { wallet: CardDetail[] };
-      }>("/api/v1/cards", {
-        method: "POST",
-        body: JSON.stringify({
-          name: card.name, last4: card.last4, network: card.network,
-          annualFee: card.annualFee, track: card.track, termsUrl: card.source.locator,
-          rules: card.rules,
-        }),
-      });
-      setWallet(result.snapshot.wallet);
-      setAdding(false);
-      setManualFor(null);
-      router.refresh();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to save card.");
-    }
-  }
-
   async function removeCard(card: CardDetail) {
     const walletId = card.walletId ?? card.id ?? card.cardId;
     if (!walletId) {
@@ -379,10 +391,16 @@ export function CardsView({
       {showFlow && (
         <AddCardFlow
           manualFor={manualFor ?? undefined}
-          onAdd={saveCard}
+          onSaved={(nextWallet) => {
+            // Deliberately no router.refresh() here: refreshing remounts this
+            // component and would throw away the review step before the user
+            // has seen what the agent actually read.
+            setWallet(nextWallet);
+          }}
           onCancel={() => {
             setAdding(false);
             setManualFor(null);
+            router.refresh();
           }}
         />
       )}

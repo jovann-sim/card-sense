@@ -1,13 +1,25 @@
 from __future__ import annotations
+import json
+import logging
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from .config import settings
 
+log = logging.getLogger(__name__)
+
 class Store:
-    def __init__(self):
+    def __init__(self, persist: bool = False):
+        """`persist` is opt-in so a bare Store() is always empty and isolated.
+
+        Only the module-level singleton reads and writes the local file; tests
+        constructing their own Store must not inherit yesterday's cards.
+        """
         self.db = None
         self.memory: dict[str, Any] = {"users": {}, "card_rules": {}, "mcc_map": {}}
+        self._persist_enabled = persist
+        self._load()
 
     def connect(self):
         """Initialise Firestore only after real-mode readiness has been checked."""
@@ -15,6 +27,40 @@ class Store:
             return
         from google.cloud import firestore
         self.db = firestore.Client(project=settings.google_cloud_project, database=settings.firestore_database)
+
+    # -- local persistence ---------------------------------------------------
+    # Without this the in-memory store loses every card on restart, which makes
+    # working on extraction miserable. Firestore, when enabled, takes over
+    # entirely and these become no-ops.
+
+    @property
+    def _path(self) -> Path:
+        return Path(settings.local_store_path)
+
+    @property
+    def _persisting(self) -> bool:
+        return self._persist_enabled and settings.persist_local_store and not self.db
+
+    def _load(self):
+        if not (self._persisting and self._path.exists()):
+            return
+        try:
+            self.memory = json.loads(self._path.read_text())
+        except Exception as exc:
+            log.warning("Could not read local store, starting empty: %s", exc)
+
+    def _persist(self):
+        if not self._persisting:
+            return
+        try:
+            self._path.write_text(json.dumps(self.memory, indent=2, default=str))
+        except Exception as exc:
+            log.warning("Could not write local store: %s", exc)
+
+    def reset(self):
+        """Drop everything. Used by tests and by starting a demo from scratch."""
+        self.memory = {"users": {}, "card_rules": {}, "mcc_map": {}}
+        self._persist()
 
     def _user_ref(self, uid: str):
         return self.db.collection("users").document(uid)
@@ -33,6 +79,7 @@ class Store:
             self._user_ref(uid).set(data, merge=True)
         else:
             self.memory["users"].setdefault(uid, {}).update(deepcopy(data))
+            self._persist()
 
     def get_subcollection(self, uid: str, collection: str) -> list[dict]:
         if self.db:
@@ -61,6 +108,7 @@ class Store:
         doc_id = doc_id or uuid.uuid4().hex
         user = self.memory["users"].setdefault(uid, {})
         user.setdefault(collection, []).append(deepcopy({"id": doc_id, **data}))
+        self._persist()
         return doc_id
 
     def set_subdoc(self, uid: str, collection: str, doc_id: str, data: dict):
@@ -70,8 +118,9 @@ class Store:
         rows = self.memory["users"].setdefault(uid, {}).setdefault(collection, [])
         for row in rows:
             if row.get("id") == doc_id:
-                row.update(deepcopy(data)); return
+                row.update(deepcopy(data)); self._persist(); return
         rows.append(deepcopy({"id": doc_id, **data}))
+        self._persist()
 
     def get_subdoc(self, uid: str, collection: str, doc_id: str) -> dict | None:
         if self.db:
@@ -86,6 +135,7 @@ class Store:
             return
         rows = self.memory["users"].setdefault(uid, {}).setdefault(collection, [])
         self.memory["users"][uid][collection] = [r for r in rows if r.get("id") != doc_id]
+        self._persist()
 
     def set_snapshot(self, uid: str, snapshot: dict):
         self.set_subdoc(uid, "snapshots", "current", snapshot)
@@ -101,6 +151,7 @@ class Store:
             self._global_ref(collection).document(doc_id).set(data, merge=True)
             return
         self.memory.setdefault(collection, {})[doc_id] = deepcopy({"id": doc_id, **data})
+        self._persist()
 
     def get_global_doc(self, collection: str, doc_id: str) -> dict | None:
         if self.db:
@@ -108,4 +159,4 @@ class Store:
             return dict(snap.to_dict() or {}, id=snap.id) if snap.exists else None
         return deepcopy(self.memory.get(collection, {}).get(doc_id))
 
-store = Store()
+store = Store(persist=True)

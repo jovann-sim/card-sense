@@ -1,28 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { api } from "@/lib/client-api";
 import type { CardDetail, ParsedRule } from "@/lib/types";
-
-/** Paced for the camera, like the connect flow. Real reads take longer. */
-const READ_MS = 1_200;
-
-const READ_STEPS = [
-  "Fetching the document",
-  "Reading it with document understanding",
-  "Matching rules to spending categories",
-];
-
-/** What a successful extraction looks like coming back from the agent. */
-const EXTRACTED: ParsedRule[] = [
-  { categoryLabel: "Dining", rate: "4% cash back", cap: null, cycleLabel: "no cap" },
-  { categoryLabel: "Groceries", rate: "1% cash back", cap: null, cycleLabel: "no cap" },
-  {
-    categoryLabel: "Everything else",
-    rate: "1% cash back",
-    cap: null,
-    cycleLabel: "no cap",
-  },
-];
 
 const BLANK_RULE: ParsedRule = {
   categoryLabel: "",
@@ -33,92 +13,116 @@ const BLANK_RULE: ParsedRule = {
 
 type Phase = "form" | "reading" | "review" | "manual";
 
+type CardResponse = { card: CardDetail; snapshot: { wallet: CardDetail[] } };
+
+/** The card as the agent returns it. `CardDetail` already carries these. */
+type Extraction = CardDetail;
+
+const FAILURE_HINT: Record<string, string> = {
+  fetch_failed: "Check the link opens in a browser, or paste the terms text instead.",
+  rate_limited: "The issuer is refusing automated requests. Try the PDF, or paste the text.",
+  unsupported_content: "That link is not a terms document.",
+  no_rules_found:
+    "The page carried no reward rates — most issuer pages load them with JavaScript. Use the terms PDF, or enter the rates yourself.",
+  low_confidence: "The rates were too ambiguous to trust. Enter them yourself below.",
+  model_unavailable: "The reader is unavailable right now. Try again, or enter the rates yourself.",
+  no_source: "Give the agent a terms link, or enter the rates yourself.",
+};
+
 export function AddCardFlow({
-  onAdd,
+  onSaved,
   onCancel,
   /** Starts straight in manual entry, for a card whose document never parsed. */
   manualFor,
 }: {
-  onAdd: (card: CardDetail) => void;
+  onSaved: (wallet: CardDetail[]) => void;
   onCancel: () => void;
-  manualFor?: CardDetail;
+  manualFor?: Extraction;
 }) {
   const [phase, setPhase] = useState<Phase>(manualFor ? "manual" : "form");
-  const [step, setStep] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<Extraction | null>(null);
 
   const [name, setName] = useState(manualFor?.name ?? "");
   const [last4, setLast4] = useState(manualFor?.last4 ?? "");
-  const [source, setSource] = useState(manualFor?.source.locator ?? "");
-  const [rules, setRules] = useState<ParsedRule[]>(
-    manualFor ? [BLANK_RULE] : EXTRACTED,
-  );
+  const [source, setSource] = useState(manualFor?.termsUrl ?? "");
+  const [network, setNetwork] = useState(manualFor?.network ?? "Visa");
+  const [track, setTrack] = useState<string>(manualFor?.track ?? "cashback");
+  const [rules, setRules] = useState<ParsedRule[]>(manualFor ? [BLANK_RULE] : []);
 
-  useEffect(() => {
-    if (phase !== "reading") return;
+  const payload = () => ({
+    name: name.trim() || "Untitled card",
+    last4: last4.trim() || "0000",
+    network,
+    annualFee: manualFor?.annualFee ?? 0,
+    track,
+    termsUrl: source.trim() || null,
+  });
 
-    if (step >= READ_STEPS.length) {
-      const t = setTimeout(() => setPhase("review"), 400);
-      return () => clearTimeout(t);
-    }
-
-    const t = setTimeout(() => setStep((s) => s + 1), READ_MS);
-    return () => clearTimeout(t);
-  }, [phase, step]);
-
-  function startRead(e: React.FormEvent) {
-    e.preventDefault();
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setStep(READ_STEPS.length);
-      setPhase("review");
-      return;
-    }
-    setStep(0);
+  /** Hand the link to the agent and show back whatever it actually read. */
+  async function readTerms(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
     setPhase("reading");
+    try {
+      const response = await api<CardResponse>("/api/v1/cards", {
+        method: "POST",
+        body: JSON.stringify(payload()),
+      });
+      const card = response.card as Extraction;
+      setResult(card);
+      setRules(card.rules?.length ? card.rules : [BLANK_RULE]);
+      onSaved(response.snapshot.wallet);
+      setPhase(card.parseStatus === "parsed" ? "review" : "manual");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reach the reader.");
+      setPhase("form");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Rates the user typed or corrected are authoritative and overwrite the read. */
+  async function saveCorrected() {
+    const usable = rules.filter((r) => r.categoryLabel.trim() && String(r.rate).trim());
+    if (!usable.length) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await api<CardResponse>("/api/v1/cards", {
+        method: "POST",
+        body: JSON.stringify({ ...payload(), rules: usable }),
+      });
+      onSaved(response.snapshot.wallet);
+      onCancel();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save those rates.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function updateRule(index: number, patch: Partial<ParsedRule>) {
-    setRules((list) =>
-      list.map((r, i) => (i === index ? { ...r, ...patch } : r)),
-    );
-  }
-
-  function commit() {
-    const usable = rules.filter(
-      (r) => r.categoryLabel.trim() !== "" && r.rate.trim() !== "",
-    );
-    if (usable.length === 0) return;
-
-    onAdd({
-      name: name.trim() || "Untitled card",
-      last4: last4.trim() || "0000",
-      network: manualFor?.network ?? "Added by you",
-      annualFee: manualFor?.annualFee ?? 0,
-      track: manualFor?.track ?? "cashback",
-      rules: usable,
-      source: {
-        label: phase === "manual" ? "Entered by you" : "Terms document you supplied",
-        locator: source.trim() || "entered by hand",
-        retrievedAt: new Date().toISOString().slice(0, 10),
-      },
-      recheckCadence: phase === "manual" ? "Not rechecked" : "Weekly",
-      nextRecheckAt: new Date().toISOString().slice(0, 10),
-      parseStatus: "parsed",
-      parseNote:
-        phase === "manual"
-          ? "Rates entered by hand. The agent will not overwrite these until you point it at a document it can read."
-          : undefined,
-    });
+    setRules((list) => list.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
   return (
     <div className="addcard">
+      {error && (
+        <p className="addcard__fine" role="alert" style={{ color: "var(--ember)" }}>
+          {error}
+        </p>
+      )}
+
       {phase === "form" && (
-        <form onSubmit={startRead}>
+        <form onSubmit={readTerms}>
           <p className="addcard__title">Add a card</p>
           <p className="addcard__lede">
             Give the agent a link to the issuer&rsquo;s terms, or a PDF. It reads
-            the rates itself and shows you what it found before anything is
-            saved.
+            the rates itself and shows you what it found before they drive
+            anything.
           </p>
 
           <div className="pform__grid">
@@ -128,7 +132,7 @@ export function AddCardFlow({
                 className="field__input"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Aurora Dining Card"
+                placeholder="HSBC Revolution"
                 required
               />
             </label>
@@ -144,13 +148,39 @@ export function AddCardFlow({
               />
             </label>
 
+            <label className="field">
+              <span className="field__label">Network</span>
+              <select
+                className="field__input"
+                value={network}
+                onChange={(e) => setNetwork(e.target.value)}
+              >
+                {["Visa", "Mastercard", "Amex", "UnionPay", "JCB"].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span className="field__label">Earns</span>
+              <select
+                className="field__input"
+                value={track}
+                onChange={(e) => setTrack(e.target.value)}
+              >
+                <option value="cashback">Cash back</option>
+                <option value="miles">Air miles</option>
+                <option value="points">Points</option>
+              </select>
+            </label>
+
             <label className="field field--wide">
               <span className="field__label">Terms link or PDF</span>
               <input
                 className="field__input"
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
-                placeholder="https://issuer.com/rates  ·  or  ·  terms.pdf"
+                placeholder="https://issuer.com/terms.pdf"
                 required
               />
             </label>
@@ -162,7 +192,7 @@ export function AddCardFlow({
           </p>
 
           <div className="pform__actions">
-            <button type="submit" className="btn">
+            <button type="submit" className="btn" disabled={busy}>
               Read the terms
             </button>
             <button type="button" className="btn btn--quiet" onClick={onCancel}>
@@ -175,23 +205,16 @@ export function AddCardFlow({
       {phase === "reading" && (
         <>
           <p className="addcard__title">Reading {name || "the document"}</p>
+          <p className="addcard__lede">
+            Fetching the document and extracting its reward rules. A PDF takes a
+            little longer than a page.
+          </p>
           <ol className="stages">
-            {READ_STEPS.map((label, i) => {
-              const state = i < step ? "done" : i === step ? "running" : "queued";
-              return (
-                <li key={label} className="stage" data-state={state}>
-                  <span className="stage__dot" aria-hidden />
-                  <span className="stage__name">{label}</span>
-                  <span className="stage__status">
-                    {state === "done"
-                      ? "done"
-                      : state === "running"
-                        ? "working…"
-                        : "queued"}
-                  </span>
-                </li>
-              );
-            })}
+            <li className="stage" data-state="running">
+              <span className="stage__dot" aria-hidden />
+              <span className="stage__name">Card intelligence agent</span>
+              <span className="stage__status">working…</span>
+            </li>
           </ol>
         </>
       )}
@@ -200,14 +223,35 @@ export function AddCardFlow({
         <>
           <p className="addcard__title">
             {phase === "manual"
-              ? `Enter the rates for ${manualFor?.name ?? name}`
-              : `Found ${rules.length} rules — check them`}
+              ? `Enter the rates for ${name || manualFor?.name || "this card"}`
+              : `Found ${rules.length} rule${rules.length === 1 ? "" : "s"} — check them`}
           </p>
           <p className="addcard__lede">
             {phase === "manual"
-              ? "The document could not be read, so these have to come from you. Copy them from your statement or the issuer's site."
-              : "Extraction is not perfect. Correct anything that is wrong before it starts driving recommendations."}
+              ? result?.failureReason
+                ? `${result.parseNote ?? ""} ${FAILURE_HINT[result.failureReason] ?? ""}`.trim()
+                : "The document could not be read, so these have to come from you."
+              : "Extraction is not perfect. Correct anything wrong before it starts driving recommendations."}
           </p>
+
+          {phase === "review" && result?.parseConfidence !== undefined && (
+            <p className="addcard__fine">
+              Read from {result.source?.label?.toLowerCase()} ·{" "}
+              {Math.round((result.parseConfidence ?? 0) * 100)}% confidence · rechecks{" "}
+              {result.recheckCadence}
+            </p>
+          )}
+
+          {phase === "review" && result?.characteristics && Object.keys(result.characteristics).length > 0 && (
+            <dl className="prov">
+              {Object.entries(result.characteristics).map(([key, value]) => (
+                <div className="prov__pair" key={key}>
+                  <dt>{key.replace(/([A-Z])/g, " $1").toLowerCase()}</dt>
+                  <dd className="num">{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
 
           <ul className="ruleedit">
             {rules.map((rule, i) => (
@@ -231,13 +275,12 @@ export function AddCardFlow({
                   type="number"
                   min="0"
                   value={rule.cap ?? ""}
-                  aria-label="Cap"
+                  aria-label="Spend cap"
                   placeholder="no cap"
                   onChange={(e) =>
                     updateRule(i, {
                       cap: e.target.value === "" ? null : Number(e.target.value),
-                      cycleLabel:
-                        e.target.value === "" ? "no cap" : "per quarter",
+                      cycleLabel: e.target.value === "" ? "no cap" : "per month",
                     })
                   }
                 />
@@ -262,23 +305,23 @@ export function AddCardFlow({
           </button>
 
           <div className="pform__actions">
-            <button type="button" className="btn" onClick={commit}>
-              {phase === "manual" ? "Save these rates" : "Looks right, add it"}
+            {phase === "review" && (
+              <button type="button" className="btn" onClick={onCancel} disabled={busy}>
+                Looks right, keep it
+              </button>
+            )}
+            <button
+              type="button"
+              className={phase === "review" ? "btn btn--quiet" : "btn"}
+              onClick={saveCorrected}
+              disabled={busy}
+            >
+              {phase === "manual" ? "Save these rates" : "Save my corrections"}
             </button>
             <button type="button" className="btn btn--quiet" onClick={onCancel}>
               Cancel
             </button>
           </div>
-
-          {phase === "review" && (
-            <button
-              type="button"
-              className="addcard__switch"
-              onClick={() => setPhase("manual")}
-            >
-              It read this wrong — let me enter the rates myself
-            </button>
-          )}
         </>
       )}
     </div>
