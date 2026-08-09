@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import csv
 import io
 import uuid
+import logging
+from time import perf_counter
 
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,11 +21,15 @@ from .models import (
     LinkTokenIn,
     ExchangeTokenIn,
     SyncIn,
+    Snapshot,
+    RunResponse,
+    CardResponse,
 )
 from .orchestrator import Orchestrator
 from .plaid_client import get_plaid_client
 
 app = FastAPI(title="CardSense Backend", version="0.2.0")
+logger = logging.getLogger("cardsense")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[x.strip() for x in settings.cors_origins.split(",")],
@@ -33,6 +39,16 @@ app.add_middleware(
 )
 orch = Orchestrator(store)
 UID = "demo-user"
+
+# The durable production version may override these with global mcc_map docs;
+# this small explicit baseline keeps Plaid's taxonomy out of reward matching.
+PLAID_CATEGORY_MAP = {
+    "FOOD_AND_DRINK": "Dining & restaurants", "GROCERIES": "Groceries",
+    "TRAVEL": "Air travel", "TRANSPORTATION": "Transit & rideshare",
+    "GAS_STATIONS": "Fuel", "ENTERTAINMENT": "Streaming & digital",
+    "GENERAL_MERCHANDISE": "Online retail", "HOME_IMPROVEMENT": "Online retail",
+    "RENT_AND_UTILITIES": "Utilities & bills",
+}
 
 
 def _uid(user_id: str | None = None) -> str:
@@ -46,13 +62,32 @@ def _plaid_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail=f"Plaid request failed: {exc}")
 
 
+@app.on_event("startup")
+def validate_runtime_configuration():
+    errors = settings.real_mode_errors()
+    if errors:
+        raise RuntimeError("CardSense configuration error: " + "; ".join(errors))
+    if not settings.demo_mode:
+        try:
+            import google.auth
+            google.auth.default()
+            store.connect()
+        except Exception as exc:
+            raise RuntimeError(
+                "CardSense requires Application Default Credentials when DEMO_MODE=false. "
+                "Run `gcloud auth application-default login` locally."
+            ) from exc
+
+
 def _normalise_plaid_transaction(tx: dict) -> dict:
     pfc = tx.get("personal_finance_category") or {}
     if isinstance(pfc, dict):
-        category = pfc.get("primary") or "uncategorized"
+        source_category = pfc.get("primary") or "uncategorized"
+        category = PLAID_CATEGORY_MAP.get(source_category, "uncategorized")
         detailed_category = pfc.get("detailed")
     else:
         category = "uncategorized"
+        source_category = "uncategorized"
         detailed_category = None
 
     return {
@@ -63,6 +98,8 @@ def _normalise_plaid_transaction(tx: dict) -> dict:
         "merchant": tx.get("merchant_name") or tx.get("name") or "Unknown",
         "amount": abs(float(tx.get("amount") or 0)),
         "category": category,
+        "categorySource": source_category,
+        "categoryAmbiguous": category == "uncategorized",
         "detailedCategory": detailed_category,
         "description": tx.get("name") or "",
         "pending": bool(tx.get("pending", False)),
@@ -75,11 +112,47 @@ def _normalise_plaid_transaction(tx: dict) -> dict:
 
 
 def _rebuild_ingestion_from_store(uid: str) -> list[dict]:
-    """Keep the existing agent contract: ingestion.transactions is the source read by Orchestrator."""
+    """Transactions are authoritative in their subcollection; never mirror them on users/{uid}."""
     transactions = store.get_subcollection(uid, "transactions")
     transactions.sort(key=lambda x: (x.get("date") or "", x.get("id") or ""))
-    store.set_user(uid, {"ingestion": {"transactions": transactions}})
     return transactions
+
+
+def _same_wallet_card(left: dict, right: dict) -> bool:
+    """Match a snapshot card to its authoritative wallet document."""
+    if left.get("accountId") and right.get("accountId"):
+        return left["accountId"] == right["accountId"]
+    return bool(
+        left.get("name")
+        and left.get("last4")
+        and left.get("name") == right.get("name")
+        and left.get("last4") == right.get("last4")
+    )
+
+
+def _normalise_snapshot_wallet(snapshot: dict, uid: str = UID) -> dict:
+    """Attach authoritative wallet document IDs to older persisted snapshots."""
+    wallet = snapshot.get("wallet")
+    if isinstance(wallet, list):
+        persisted_wallet = store.get_wallet(uid)
+        snapshot["wallet"] = [
+            {
+                **card,
+                "walletId": next(
+                    (
+                        persisted.get("walletId")
+                        for persisted in persisted_wallet
+                        if persisted.get("cardId") == card.get("cardId")
+                        or _same_wallet_card(persisted, card)
+                    ),
+                    card.get("walletId") or card.get("id") or card.get("cardId"),
+                ),
+                "cardId": card.get("cardId") or card.get("id"),
+            }
+            for card in wallet
+            if card.get("cardId") or card.get("id")
+        ]
+    return snapshot
 
 
 @app.get("/health")
@@ -89,18 +162,23 @@ def health():
         "demoMode": settings.demo_mode,
         "model": settings.finance_agent_model,
         "plaidEnv": settings.plaid_env if not settings.demo_mode else "demo",
+        "realModeErrors": settings.real_mode_errors(),
     }
 
 
-@app.get("/api/v1/snapshot")
+@app.get("/api/v1/snapshot", response_model=Snapshot)
 def snapshot():
+    started = perf_counter()
     snap = store.get_snapshot(UID)
+    persisted = snap is not None
     if not snap:
-        _, snap = orch.run(UID)
+        snap = orch.empty_snapshot(UID)
+    snap = _normalise_snapshot_wallet(snap)
+    logger.info("snapshot uid=%s duration_ms=%d persisted=%s", UID, round((perf_counter() - started) * 1000), persisted)
     return snap
 
 
-@app.post("/api/v1/runs")
+@app.post("/api/v1/runs", response_model=RunResponse)
 def run_agents(body: RunIn):
     run_id, snap = orch.run(UID, body.request)
     return {"runId": run_id, "snapshot": snap}
@@ -115,28 +193,22 @@ def run_status(run_id: str):
     return row
 
 
-@app.post("/api/v1/planned")
+@app.post("/api/v1/planned", response_model=Snapshot)
 def add_planned(body: PlannedItemIn):
     item = {"id": uuid.uuid4().hex, **body.model_dump(mode="json")}
     store.add_subdoc(UID, "planned", item, item["id"])
-    user = store.get_user(UID)
-    planned = user.get("planned", [])
-    planned.append(item)
-    store.set_user(UID, {"planned": planned})
     _, snap = orch.run(UID, "Recalculate after planned spending change")
     return snap
 
 
-@app.delete("/api/v1/planned/{planned_id}")
+@app.delete("/api/v1/planned/{planned_id}", response_model=Snapshot)
 def delete_planned(planned_id: str):
     store.delete_subdoc(UID, "planned", planned_id)
-    user = store.get_user(UID)
-    store.set_user(UID, {"planned": [x for x in user.get("planned", []) if x.get("id") != planned_id]})
     _, snap = orch.run(UID, "Recalculate after planned spending removal")
     return snap
 
 
-@app.post("/api/v1/goals")
+@app.post("/api/v1/goals", response_model=Snapshot)
 def set_goal(body: GoalIn):
     goal = body.model_dump(mode="json")
     store.set_user(UID, {"goal": goal})
@@ -144,37 +216,31 @@ def set_goal(body: GoalIn):
     return snap
 
 
-@app.post("/api/v1/advice/{advice_id}/resolve")
+@app.post("/api/v1/advice/{advice_id}/resolve", response_model=Snapshot)
 def resolve_advice(advice_id: str, body: AdviceResolveIn):
-    user = store.get_user(UID)
-    records = user.get("trackRecord", {}).get("records", [])
-    found = False
-    for r in records:
-        if r.get("id") == advice_id:
-            r.update({"outcome": body.outcome, "resolvedAt": datetime.now(timezone.utc).isoformat()})
-            found = True
-    if not found:
+    advice = store.get_subdoc(UID, "advice", advice_id)
+    if not advice:
         raise HTTPException(404, "Advice not found")
-    tr = user.get("trackRecord", {})
-    tr["records"] = records
-    store.set_user(UID, {"trackRecord": tr})
+    store.set_subdoc(UID, "advice", advice_id, {"outcome": body.outcome, "resolvedAt": datetime.now(timezone.utc).isoformat()})
     _, snap = orch.run(UID, "Recalculate after advice resolution")
     return snap
 
 
-@app.post("/api/v1/cards")
+@app.post("/api/v1/cards", response_model=CardResponse)
 def add_card(body: CardIn):
     card = body.model_dump(mode="json")
     parsed = {"rules": card.get("rules") or [], "status": "parsed" if card.get("rules") else "failed", "note": None}
     if not parsed["rules"]:
         parsed = orch.cardintel.parse(card)
-    wallet = store.get_user(UID).get("wallet", [])
+    card_id = f"{card['network'].lower()}-{card['name'].lower().replace(' ', '-') }"
     card_detail = {
         "name": card["name"],
         "last4": card["last4"],
         "network": card["network"],
         "annualFee": card["annualFee"],
         "track": card["track"],
+        "cardId": card_id,
+        "accountId": card.get("accountId"),
         "rules": parsed.get("rules", []),
         "source": {
             "label": "User supplied terms",
@@ -186,17 +252,47 @@ def add_card(body: CardIn):
         "parseStatus": parsed.get("status", "failed"),
         "parseNote": parsed.get("note"),
     }
-    wallet = [x for x in wallet if x.get("name") != card["name"]] + [card_detail]
-    rule_map = store.get_user(UID).get("card_rules", {})
-    rule_map[card["name"]] = parsed.get("rules", [])
-    store.set_user(UID, {"wallet": wallet, "card_rules": rule_map})
+    store.set_global_doc("card_rules", card_id, {"rules": parsed.get("rules", []), "source": card_detail["source"], "status": card_detail["parseStatus"]})
+    store.set_subdoc(UID, "wallet", card_id, card_detail)
     _, snap = orch.run(UID, "Recalculate after card added")
     return {"card": card_detail, "snapshot": snap}
 
 
 @app.get("/api/v1/cards")
 def cards():
-    return store.get_user(UID).get("wallet", [])
+    return store.get_wallet(UID)
+
+
+@app.delete("/api/v1/cards/{wallet_or_card_id}", response_model=Snapshot)
+def delete_card(wallet_or_card_id: str):
+    card = store.get_subdoc(UID, "wallet", wallet_or_card_id)
+    if not card:
+        wallet = store.get_wallet(UID)
+        card = next(
+            (item for item in wallet if item.get("cardId") == wallet_or_card_id),
+            None,
+        )
+    if not card:
+        # Persisted snapshots created before walletId was introduced can contain
+        # only a derived cardId. Correlate that record back to the live wallet.
+        snapshot_card = next(
+            (
+                item
+                for item in (store.get_snapshot(UID) or {}).get("wallet", [])
+                if wallet_or_card_id in {
+                    item.get("walletId"), item.get("id"), item.get("cardId")
+                }
+            ),
+            None,
+        )
+        if snapshot_card:
+            card = next((item for item in wallet if _same_wallet_card(item, snapshot_card)), None)
+    if not card:
+        raise HTTPException(404, "Card not found in wallet")
+    # Rules are global card knowledge; only remove this user's wallet reference.
+    store.delete_subdoc(UID, "wallet", card.get("walletId") or card.get("id") or wallet_or_card_id)
+    _, snap = orch.run(UID, "Recalculate after card removed")
+    return snap
 
 
 @app.post("/api/v1/plaid/link-token")
@@ -262,6 +358,7 @@ def plaid_exchange(body: ExchangeTokenIn):
 
 @app.post("/api/v1/plaid/sync")
 def plaid_sync(body: SyncIn):
+    started = perf_counter()
     if settings.demo_mode:
         return {"ok": True, "demo": True, "message": "Demo mode: use CSV ingestion or seeded transactions."}
 
@@ -333,6 +430,7 @@ def plaid_sync(body: SyncIn):
 
         transactions = _rebuild_ingestion_from_store(uid)
         run_id, snap = orch.run(uid, "Analyse newly synced Plaid transactions")
+        logger.info("plaid_sync uid=%s duration_ms=%d added=%d modified=%d removed=%d", uid, round((perf_counter() - started) * 1000), totals["added"], totals["modified"], totals["removed"])
 
         return {
             "ok": True,
@@ -381,6 +479,8 @@ async def import_csv(file: UploadFile = File(...)):
                 "description": r.get("description") or "",
             })
 
-    store.set_user(UID, {"ingestion": {"transactions": rows}})
+    for row in rows:
+        row["id"] = uuid.uuid4().hex
+        store.set_subdoc(UID, "transactions", row["id"], row)
     run_id, snap = orch.run(UID, "Analyse imported bank statement")
     return {"imported": len(rows), "runId": run_id, "snapshot": snap}

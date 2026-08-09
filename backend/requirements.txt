@@ -3,6 +3,7 @@ uvicorn[standard]==0.35.0
 pydantic==2.11.7
 pydantic-settings==2.10.1
 python-dotenv==1.1.1
+certifi==2025.10.5
 google-cloud-firestore==2.21.0
 google-genai==1.28.0
 plaid-python==38.0.0

@@ -1,24 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import type { Goal, PlannedItem, RewardTrack } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import type { Goal, PlannedItem, RewardTrack, TrackValuation } from "@/lib/types";
 import { count, dayMonth, money } from "@/lib/format";
 import { daysBetween, projectArrival, weeksBetween } from "@/lib/goal";
 import { PlannedForm } from "./PlannedForm";
+import { api } from "@/lib/client-api";
 
 /**
  * Balance and earning rate per track, as the strategy agent last reported
  * them. Switching track re-bases the goal against that track's numbers.
  */
-const TRACK_BASIS: Record<
-  RewardTrack,
-  { unitLabel: string; current: number; pacePerMonth: number }
-> = {
-  points: { unitLabel: "points", current: 24_180, pacePerMonth: 19_100 },
-  cashback: { unitLabel: "dollars", current: 186.4, pacePerMonth: 147 },
-  miles: { unitLabel: "miles", current: 18_900, pacePerMonth: 14_900 },
-};
-
 const TRACK_LABEL: Record<RewardTrack, string> = {
   points: "Points",
   cashback: "Cash back",
@@ -32,10 +25,12 @@ function units(n: number, track: RewardTrack) {
 export function GoalsView({
   goal: initialGoal,
   planned: initialPlanned,
+  tracks,
   today,
 }: {
   goal: Goal | null;
   planned: PlannedItem[];
+  tracks: TrackValuation[];
   today: string;
 }) {
   const [track, setTrack] = useState<RewardTrack>(initialGoal?.track ?? "miles");
@@ -46,8 +41,16 @@ export function GoalsView({
 
   const [planned, setPlanned] = useState(initialPlanned);
   const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const router = useRouter();
 
-  const basis = TRACK_BASIS[track];
+  const valuation = tracks.find((value) => value.track === track);
+  const basis = {
+    unitLabel: track === "cashback" ? "dollars" : track,
+    current: initialGoal?.track === track ? initialGoal.current : (valuation?.rawUnits ?? 0),
+    pacePerMonth: initialGoal?.track === track ? initialGoal.pacePerMonth : 0,
+  };
   const targetValue = hasTarget && Number(target) > 0 ? Number(target) : null;
   const progress =
     targetValue === null ? 0 : Math.min(100, (basis.current / targetValue) * 100);
@@ -68,6 +71,51 @@ export function GoalsView({
   const fixProjected = fix
     ? projectArrival(basis.current, targetValue, fix.pacePerMonth, today)
     : null;
+
+  async function saveGoal() {
+    setSaving(true);
+    setRequestError(null);
+    try {
+      await api("/api/v1/goals", {
+        method: "POST",
+        body: JSON.stringify({ track, target: targetValue, unitLabel: basis.unitLabel, current: basis.current, deadline: deadline || null, purpose }),
+      });
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to save goal.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addPlan(item: PlannedItem) {
+    setSaving(true);
+    setRequestError(null);
+    try {
+      await api("/api/v1/planned", { method: "POST", body: JSON.stringify(item) });
+      setPlanned((list) => [...list, item].sort((a, b) => a.startDate.localeCompare(b.startDate)));
+      setAdding(false);
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to save planned spending.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removePlan(id: string) {
+    setSaving(true);
+    setRequestError(null);
+    try {
+      await api(`/api/v1/planned/${id}`, { method: "DELETE" });
+      setPlanned((list) => list.filter((item) => item.id !== id));
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to remove planned spending.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <>
@@ -139,6 +187,11 @@ export function GoalsView({
                 possible
               </span>
             </label>
+            <div className="pform__actions">
+              <button type="button" className="btn" onClick={saveGoal} disabled={saving}>
+                {saving ? "Saving…" : "Save goal"}
+              </button>
+            </div>
           </div>
 
           <div className="goal__state" data-late={late}>
@@ -244,28 +297,21 @@ export function GoalsView({
               <button
                 type="button"
                 className="plan__remove"
-                onClick={() =>
-                  setPlanned((list) => list.filter((p) => p.id !== item.id))
-                }
+                onClick={() => removePlan(item.id)}
               >
                 Remove
               </button>
             </li>
-          ))}
+        ))}
         </ul>
+
+        {requestError && <p className="addcard__fine" role="alert">{requestError}</p>}
 
         {adding ? (
           <PlannedForm
             defaultDate={today.slice(0, 10)}
             onCancel={() => setAdding(false)}
-            onAdd={(item) => {
-              setPlanned((list) =>
-                [...list, item].sort((a, b) =>
-                  a.startDate.localeCompare(b.startDate),
-                ),
-              );
-              setAdding(false);
-            }}
+            onAdd={addPlan}
           />
         ) : (
           <button type="button" className="btn" onClick={() => setAdding(true)}>

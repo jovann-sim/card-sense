@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { GoalsView } from "@/components/GoalsView";
-import { snapshot } from "@/lib/mock";
+import { getSnapshot } from "@/lib/api";
 
 export const metadata: Metadata = {
   title: "CardSense — Goals",
 };
 
-export default function GoalsPage() {
+export default async function GoalsPage() {
+  const snapshot = await getSnapshot();
   return (
     <main>
       <section className="shell hero hero--sub">
@@ -28,6 +29,7 @@ export default function GoalsPage() {
         <GoalsView
           goal={snapshot.goal}
           planned={snapshot.planned}
+          tracks={snapshot.tracks}
           today={snapshot.generatedAt}
         />
       </div>

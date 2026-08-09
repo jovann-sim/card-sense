@@ -1,9 +1,14 @@
-from datetime import date, datetime
-from pydantic import BaseModel, Field
+from __future__ import annotations
+
+from datetime import date
 from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 RewardTrack = Literal["points", "cashback", "miles"]
 AdviceOutcome = Literal["open", "acted", "dismissed", "expired"]
+AgentStatus = Literal["ok", "degraded", "running"]
+
 
 class PlannedItemIn(BaseModel):
     kind: Literal["event", "purchase"]
@@ -14,6 +19,7 @@ class PlannedItemIn(BaseModel):
     categories: list[str]
     note: str | None = None
 
+
 class GoalIn(BaseModel):
     track: RewardTrack
     target: float | None = Field(default=None, ge=0)
@@ -22,8 +28,10 @@ class GoalIn(BaseModel):
     deadline: date | None = None
     purpose: str = ""
 
+
 class AdviceResolveIn(BaseModel):
     outcome: AdviceOutcome
+
 
 class CardIn(BaseModel):
     name: str
@@ -31,33 +39,68 @@ class CardIn(BaseModel):
     network: str
     annualFee: float = Field(default=0, ge=0)
     track: RewardTrack
+    accountId: str | None = None
     termsText: str | None = None
     termsUrl: str | None = None
     rules: list[dict[str, Any]] | None = None
 
+
 class RunIn(BaseModel):
     request: str = "Run the CardSense autonomous spending analysis."
+
 
 class LinkTokenIn(BaseModel):
     userId: str = "demo-user"
 
+
 class ExchangeTokenIn(BaseModel):
     publicToken: str
     userId: str = "demo-user"
+
 
 class SyncIn(BaseModel):
     userId: str = "demo-user"
     itemId: str | None = None
     cursor: str | None = None
 
-class AgentLog(BaseModel):
-    id: str
-    agent: str
-    status: str
-    startedAt: str
-    durationMs: int
-    summary: str
-    detail: str | None = None
-    writes: str
-    reads: list[str] = []
-    retryable: bool = False
+
+# The following models deliberately mirror web/lib/types.ts.  The API owns this
+# boundary so components can consume a Snapshot without defensive parsing.
+class AgentRun(BaseModel):
+    id: Literal["ingestion", "forecast", "card-intelligence", "strategy", "advisory"]
+    label: str
+    status: AgentStatus
+    lastRunAt: str
+    note: str | None = None
+
+
+class Snapshot(BaseModel):
+    generatedAt: str
+    period: dict[str, Any]
+    totals: dict[str, float]
+    agents: list[AgentRun]
+    recommendations: list[dict[str, Any]]
+    categories: list[dict[str, Any]]
+    cards: list[dict[str, Any]]
+    tracks: list[dict[str, Any]]
+    trackPreference: RewardTrack | None = None
+    recommendedTrack: RewardTrack
+    trackRationale: str
+    forecast: dict[str, Any]
+    goal: dict[str, Any] | None = None
+    planned: list[dict[str, Any]]
+    trackRecord: dict[str, Any]
+    wallet: list[dict[str, Any]]
+    catalog: list[dict[str, Any]]
+    activity: list[dict[str, Any]]
+    collections: list[dict[str, Any]]
+
+
+class RunResponse(BaseModel):
+    runId: str
+    snapshot: Snapshot
+
+
+class CardResponse(BaseModel):
+    card: dict[str, Any]
+    snapshot: Snapshot

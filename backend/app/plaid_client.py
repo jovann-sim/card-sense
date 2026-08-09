@@ -3,6 +3,7 @@ from __future__ import annotations
 from plaid.api import plaid_api
 from plaid.api_client import ApiClient
 from plaid.configuration import Configuration
+import certifi
 
 from .config import settings
 
@@ -26,6 +27,9 @@ def get_plaid_client() -> plaid_api.PlaidApi:
             "clientId": settings.plaid_client_id,
             "secret": settings.plaid_secret,
         },
+        # Use a maintained CA bundle instead of relying on the host Python
+        # installation's certificate store.
+        ssl_ca_cert=certifi.where(),
     )
     api_client = ApiClient(configuration)
     return plaid_api.PlaidApi(api_client)

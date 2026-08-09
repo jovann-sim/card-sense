@@ -6,9 +6,10 @@ import { Recommendations } from "@/components/Recommendations";
 import { TrackPanel } from "@/components/TrackPanel";
 import { TrackRecordStrip } from "@/components/TrackRecordStrip";
 import { dayMonth, money } from "@/lib/format";
-import { snapshot } from "@/lib/mock";
+import { getSnapshot } from "@/lib/api";
 
-export default function SpendingAnalytics() {
+export default async function SpendingAnalytics() {
+  const snapshot = await getSnapshot();
   const { period, totals, generatedAt } = snapshot;
   const optimal = totals.captured + totals.unclaimed;
 

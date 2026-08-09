@@ -13,6 +13,17 @@ service cloud.firestore {
       allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
+    // All operational state is server-owned.  The HTTP API is the write
+    // boundary; clients never receive raw transactions, rules, or advice.
+    match /users/{uid}/{collection}/{document} {
+      allow read, write: if false;
+    }
+    match /card_rules/{cardId} {
+      allow read, write: if false;
+    }
+    match /mcc_map/{category} {
+      allow read, write: if false;
+    }
     match /{document=**} {
       allow read, write: if false;
     }

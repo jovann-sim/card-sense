@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import { ForecastView } from "@/components/ForecastView";
 import { money } from "@/lib/format";
-import { snapshot } from "@/lib/mock";
+import { getSnapshot } from "@/lib/api";
 
 export const metadata: Metadata = {
   title: "CardSense — What's coming",
 };
 
-export default function ForecastPage() {
+export default async function ForecastPage() {
+  const snapshot = await getSnapshot();
   const { forecast } = snapshot;
 
   return (

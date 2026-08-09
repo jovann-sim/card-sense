@@ -14,4 +14,14 @@ class Settings(BaseSettings):
     internal_run_secret: str = "change-me"
     cors_origins: str = "http://localhost:3000"
 
+    def real_mode_errors(self) -> list[str]:
+        if self.demo_mode:
+            return []
+        required = {
+            "GOOGLE_CLOUD_PROJECT": self.google_cloud_project,
+            "PLAID_CLIENT_ID": self.plaid_client_id,
+            "PLAID_SECRET": self.plaid_secret,
+        }
+        return [f"{key} is required when DEMO_MODE=false" for key, value in required.items() if not value]
+
 settings = Settings()
