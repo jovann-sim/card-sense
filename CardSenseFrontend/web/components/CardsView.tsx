@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CardDetail, CatalogCard, ParseStatus } from "@/lib/types";
-import { dayMonth, money } from "@/lib/format";
+import { dayMonth, money, moneyIn } from "@/lib/format";
 import { api } from "@/lib/client-api";
 import { AddCardFlow } from "./AddCardFlow";
 
@@ -37,7 +37,7 @@ function Wallet({
                 {card.network} · ••{card.last4} ·{" "}
                 {card.annualFee === 0
                   ? "no annual fee"
-                  : `${money(card.annualFee)} a year`}
+                  : `${moneyIn(card.annualFee, card.characteristics?.currency)} a year`}
               </p>
             </div>
             <span className="wcard__parse">{PARSE_LABEL[card.parseStatus]}</span>
@@ -51,7 +51,7 @@ function Wallet({
                   <span className="rules__rate num">{rule.rate}</span>
                   <span className="rules__cap num">
                     {rule.cap
-                      ? `${money(rule.cap)} ${rule.cycleLabel}`
+                      ? `${moneyIn(rule.cap, card.characteristics?.currency)} ${rule.cycleLabel}`
                       : rule.cycleLabel}
                   </span>
                 </li>

@@ -15,13 +15,8 @@ type Phase = "form" | "reading" | "review" | "manual";
 
 type CardResponse = { card: CardDetail; snapshot: { wallet: CardDetail[] } };
 
-/** Extra fields the card intelligence agent returns alongside the rules. */
-type Extraction = CardDetail & {
-  parseConfidence?: number;
-  failureReason?: string | null;
-  characteristics?: Record<string, number | string>;
-  termsUrl?: string | null;
-};
+/** The card as the agent returns it. `CardDetail` already carries these. */
+type Extraction = CardDetail;
 
 const FAILURE_HINT: Record<string, string> = {
   fetch_failed: "Check the link opens in a browser, or paste the terms text instead.",

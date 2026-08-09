@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.terms import document_from_upload
+from .valuations import BASE_CURRENCY
 from .config import settings
 from .store import store
 from .models import (
@@ -259,6 +260,8 @@ def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
         "accountId": card.get("accountId"),
         "rules": parsed.get("rules", []),
         "characteristics": parsed.get("characteristics", {}),
+        # The card's own billing currency. Rendered rather than converted.
+        "currency": parsed.get("currency", BASE_CURRENCY),
         "source": parsed["source"],
         "recheckCadence": parsed.get("recheckCadence", "weekly"),
         "nextRecheckAt": parsed.get("nextRecheckAt", str(datetime.now(timezone.utc).date())),

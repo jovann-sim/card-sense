@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..config import settings
 from .runtime import ModelUnavailable
+from ..valuations import BASE_CURRENCY, unit_value
 from .schema import (
     EXTRACTION_PROMPT,
     ExtractionResult,
@@ -86,10 +87,17 @@ class CardIntelligenceAgent:
     # --------------------------------------------------------------- output --
 
     def _success(self, extraction: ExtractionResult, document: TermsDocument, card: dict) -> dict:
+        characteristics = extraction.characteristics.model_dump(exclude_none=True)
+        programme = characteristics.get("rewardCurrency")
+        # A card's own terms decide its currency. We label rather than convert:
+        # applying an FX rate we invented would be worse than saying "this is USD".
+        currency = (characteristics.get("currency") or BASE_CURRENCY).upper()
+
         rules = []
         for rule in extraction.rules:
             data = rule.model_dump()
             priced = spend_cap(data)
+            unit_priced, unit_source = unit_value(programme, data.get("rewardType", "cashback"))
             rules.append({
                 **data,
                 # `cap` means spend in the card's billing currency, always —
@@ -102,12 +110,16 @@ class CardIntelligenceAgent:
                 "capValue": data.get("cap"),
                 # Kept so existing consumers that render a string still work.
                 "rate": display_rate(data),
-                # The field every calculation should actually use.
-                "valuePerDollar": value_per_dollar(data),
+                # The field every calculation should actually use, priced
+                # through this card's own programme rather than a flat rate.
+                "valuePerDollar": value_per_dollar(data, programme),
+                "rewardCurrency": programme,
+                "rewardUnitValue": unit_priced,
+                "rewardUnitValueSource": unit_source,
+                "currency": currency,
             })
         rules.sort(key=lambda item: item["valuePerDollar"], reverse=True)
 
-        characteristics = extraction.characteristics.model_dump(exclude_none=True)
         today = datetime.now(timezone.utc).date()
         return {
             "rules": rules,
@@ -124,6 +136,7 @@ class CardIntelligenceAgent:
             "recheckCadence": "weekly",
             "nextRecheckAt": str(today + timedelta(days=7)),
             "documentSummary": extraction.documentSummary,
+            "currency": currency,
             # Prefer what the document says over what the form claimed.
             "annualFee": characteristics.get("annualFee", card.get("annualFee")),
         }

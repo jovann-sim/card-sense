@@ -4,10 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Nominal dollar value of one unit of each reward currency. Kept here rather
-# than in strategy.py so extraction can pre-compute valuePerDollar without the
-# two modules importing each other.
-VALUATIONS = {"cashback": 1.0, "points": 0.01, "miles": 0.013}
+from ..valuations import BASE_CURRENCY, VALUATIONS, unit_value  # noqa: F401
 
 RewardType = Literal["cashback", "points", "miles"]
 RateUnit = Literal["percent", "points_per_dollar", "miles_per_dollar"]
@@ -50,12 +47,13 @@ class ExtractionResult(BaseModel):
     documentSummary: str | None = Field(default=None, description="One sentence on what this document is")
 
 
-def value_per_dollar(rule: ExtractedRule | dict) -> float:
-    """Nominal dollars returned per dollar spent — the only number strategy needs.
+def value_per_dollar(rule: ExtractedRule | dict, reward_currency: str | None = None) -> float:
+    """Nominal currency returned per dollar spent — the only number strategy needs.
 
     A percentage is already a fraction of the dollar. A per-dollar earn rate has
-    to be priced through the reward currency: 1.4 miles per dollar at $0.013 a
-    mile returns $0.0182 per dollar spent.
+    to be priced through the specific programme: 1.2 KrisFlyer miles at 1.9
+    cents is worth more than 1.2 miles of a programme priced at 1.4, which is
+    why the currency name matters rather than just the reward type.
     """
     data = rule if isinstance(rule, dict) else rule.model_dump()
     rate = float(data.get("rateValue") or 0)
@@ -64,7 +62,11 @@ def value_per_dollar(rule: ExtractedRule | dict) -> float:
 
     if unit == "percent":
         return round(rate / 100, 6)
-    return round(rate * VALUATIONS.get(reward, 0.01), 6)
+    if reward == "cashback":
+        return round(rate, 6)
+
+    priced, _ = unit_value(reward_currency or data.get("rewardCurrency"), reward)
+    return round(rate * priced, 6)
 
 
 def spend_cap(rule: ExtractedRule | dict) -> float | None:
