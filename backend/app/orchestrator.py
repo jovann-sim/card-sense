@@ -8,6 +8,7 @@ from time import perf_counter
 from .agents.advisory import AdvisoryAgent
 from .agents.card_intelligence import CardIntelligenceAgent
 from .agents.forecast import ForecastAgent
+from .agents.ingestion import IngestionAgent
 from .agents.runtime import GeminiRuntime
 from .agents.strategy import StrategyAgent, VALUATIONS
 from .models import Snapshot
@@ -74,6 +75,7 @@ class Orchestrator:
     def __init__(self, store):
         self.store = store
         runtime = GeminiRuntime()
+        self.ingestion = IngestionAgent()
         self.forecast = ForecastAgent()
         self.strategy = StrategyAgent()
         self.advisory = AdvisoryAgent(runtime)
@@ -126,7 +128,17 @@ class Orchestrator:
                 ["advice"],
                 summary="Existing advice retained; deterministic state recalculated without a model call.",
             )
-        self._log(uid, run_id, "ingestion", "Ingestion", "transactions", ["plaid_items", "mcc_map"])
+        # Ingestion reports on the feed it has already normalised: how much of
+        # it can actually be matched to a card rule, and how much cannot.
+        ingest = self.ingestion.run(uid, self.store)
+        self._log(
+            uid, run_id, "ingestion", "Ingestion", "transactions", ["plaid_items"],
+            self.ingestion.degraded(ingest),
+            summary=(
+                f"{ingest['purchases']} purchases from {ingest['total']} transactions; "
+                f"{ingest['mccCoverage']:.0%} carry a merchant category code."
+            ),
+        )
         snapshot = self.project(uid, run_id)
         self.store.set_snapshot(uid, snapshot)
         self.store.set_user(uid, {"lastRunId": run_id, "lastRunAt": snapshot["generatedAt"]})

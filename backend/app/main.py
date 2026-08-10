@@ -108,35 +108,56 @@ def _firestore_safe_plaid_value(value):
 
 
 def _normalise_plaid_transaction(tx: dict) -> dict:
-    pfc = tx.get("personal_finance_category") or {}
-    if isinstance(pfc, dict):
-        source_category = pfc.get("primary") or "uncategorized"
-        category = PLAID_CATEGORY_MAP.get(source_category, "uncategorized")
-        detailed_category = pfc.get("detailed")
-    else:
-        category = "uncategorized"
-        source_category = "uncategorized"
-        detailed_category = None
+    """Delegates to the ingestion agent, which owns the transaction shape."""
+    return _firestore_safe_plaid_value(orch.ingestion.normalise_plaid(tx))
 
-    return _firestore_safe_plaid_value({
-        "id": tx.get("transaction_id"),
-        "source": "plaid",
-        "accountId": tx.get("account_id"),
-        "date": tx.get("date") or tx.get("authorized_date"),
-        "merchant": tx.get("merchant_name") or tx.get("name") or "Unknown",
-        "amount": abs(float(tx.get("amount") or 0)),
-        "category": category,
-        "categorySource": source_category,
-        "categoryAmbiguous": category == "uncategorized",
-        "detailedCategory": detailed_category,
-        "description": tx.get("name") or "",
-        "pending": bool(tx.get("pending", False)),
-        "currency": tx.get("iso_currency_code") or tx.get("unofficial_currency_code"),
-        "paymentChannel": tx.get("payment_channel"),
-        "location": tx.get("location") or {},
-        "rawPlaid": tx,
-        "updatedAt": datetime.now(timezone.utc).isoformat(),
-    })
+
+def _store_plaid_accounts(uid: str, client, access_token: str, item_id: str) -> list[dict]:
+    """Persist the accounts behind a Plaid Item so cards can be linked to them."""
+    from plaid.model.accounts_get_request import AccountsGetRequest
+
+    accounts = client.accounts_get(AccountsGetRequest(access_token=access_token)).to_dict()["accounts"]
+    stored = []
+    for account in accounts:
+        record = _firestore_safe_plaid_value({
+            "id": account["account_id"],
+            "itemId": item_id,
+            "mask": account.get("mask"),
+            "name": account.get("name"),
+            "officialName": account.get("official_name"),
+            "type": str(account.get("type") or ""),
+            "subtype": str(account.get("subtype") or ""),
+        })
+        store.set_subdoc(uid, "plaid_accounts", account["account_id"], record)
+        stored.append(record)
+    return stored
+
+
+def link_accounts_to_cards(uid: str) -> list[dict]:
+    """Attach Plaid accounts to wallet cards by matching the last four digits.
+
+    Without this, strategy cannot attribute any transaction to a card, so every
+    category reports zero captured reward and flags itself unverified. Plaid
+    exposes the account mask, which is exactly the last4 the user typed when
+    adding the card, so the common case needs no interaction at all.
+    """
+    accounts = store.get_subcollection(uid, "plaid_accounts")
+    linked = []
+    for card in store.get_wallet(uid):
+        if card.get("accountId"):
+            continue
+        match = next(
+            (a for a in accounts
+             if a.get("mask") and card.get("last4")
+             and str(a["mask"]) == str(card["last4"])
+             and "credit" in f"{a.get('type')} {a.get('subtype')}".lower()),
+            None,
+        )
+        if not match:
+            continue
+        store.set_subdoc(uid, "wallet", card["cardId"], {"accountId": match["id"]})
+        linked.append({"cardId": card["cardId"], "accountId": match["id"], "mask": match["mask"]})
+    return linked
 
 
 def _rebuild_ingestion_from_store(uid: str) -> list[dict]:
@@ -193,7 +214,7 @@ def health():
         "status": "ok",
         "demoMode": settings.demo_mode,
         "model": settings.finance_agent_model,
-        "plaidEnv": settings.plaid_env if not settings.demo_mode else "demo",
+        "plaidEnv": settings.plaid_env if settings.use_plaid else "not configured",
         "realModeErrors": settings.real_mode_errors(),
     }
 
@@ -370,6 +391,34 @@ async def upload_terms(card_id: str, file: UploadFile = File(...)):
     return {"card": card_detail, "snapshot": snap}
 
 
+@app.post("/api/v1/cards/{card_id}/link-account", response_model=CardResponse)
+def link_card_account(card_id: str, body: dict):
+    """Attach a Plaid account to a card by hand when the mask does not match."""
+    card = store.get_subdoc(UID, "wallet", card_id)
+    if not card:
+        raise HTTPException(404, "Card not found")
+    account_id = (body or {}).get("accountId")
+    if not account_id:
+        raise HTTPException(400, "accountId is required")
+    if not store.get_subdoc(UID, "plaid_accounts", account_id):
+        raise HTTPException(404, "No such Plaid account for this user")
+
+    store.set_subdoc(UID, "wallet", card_id, {"accountId": account_id})
+    _, snap = orch.run(UID, "Recalculate after linking an account", refresh_advice=False)
+    return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
+
+
+@app.get("/api/v1/plaid/accounts")
+def plaid_accounts():
+    """Accounts we know about, and which card each is linked to."""
+    wallet = store.get_wallet(UID)
+    by_account = {c["accountId"]: c for c in wallet if c.get("accountId")}
+    return [
+        {**account, "linkedCard": (by_account.get(account["id"]) or {}).get("name")}
+        for account in store.get_subcollection(UID, "plaid_accounts")
+    ]
+
+
 @app.get("/api/v1/cards")
 def cards():
     return store.get_wallet(UID)
@@ -413,7 +462,7 @@ def delete_card(wallet_or_card_id: str):
 
 @app.post("/api/v1/plaid/link-token")
 def plaid_link_token(body: LinkTokenIn):
-    if settings.demo_mode:
+    if not settings.use_plaid:
         return {"demo": True, "link_token": "demo-link-token"}
 
     try:
@@ -437,10 +486,56 @@ def plaid_link_token(body: LinkTokenIn):
         raise _plaid_error(exc)
 
 
+@app.post("/api/v1/plaid/sandbox/seed")
+def plaid_sandbox_seed(body: LinkTokenIn):
+    """Create a sandbox Item and exchange it in one call.
+
+    Plaid Link exists so a human can type bank credentials somewhere we never
+    see. In sandbox there are no real credentials, so this shortcut mints the
+    public token directly — which means ingestion can be built and tested
+    before any of the Link UI exists. Sandbox only, by construction.
+    """
+    if not settings.use_plaid:
+        raise HTTPException(400, "Plaid is not configured; set PLAID_CLIENT_ID and PLAID_SECRET.")
+    if (settings.plaid_env or "sandbox").lower() != "sandbox":
+        raise HTTPException(400, "This endpoint only exists for the sandbox environment.")
+
+    from plaid.model.products import Products
+    from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
+
+    uid = _uid(body.userId)
+    client = get_plaid_client()
+    try:
+        created = client.sandbox_public_token_create(SandboxPublicTokenCreateRequest(
+            institution_id="ins_109508",  # First Platypus Bank, the standard sandbox institution
+            initial_products=[Products("transactions")],
+        )).to_dict()
+        from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+
+        exchanged = client.item_public_token_exchange(
+            ItemPublicTokenExchangeRequest(public_token=created["public_token"])
+        ).to_dict()
+    except Exception as exc:
+        raise _plaid_error(exc)
+
+    item_id = exchanged["item_id"]
+    store.set_subdoc(uid, "plaid_items", item_id, {
+        "id": item_id,
+        "accessToken": exchanged["access_token"],
+        "cursor": None,
+        "institutionId": "ins_109508",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    })
+    accounts = _store_plaid_accounts(uid, client, exchanged["access_token"], item_id)
+    return {"ok": True, "itemId": item_id, "userId": uid, "accounts": len(accounts),
+            "linked": link_accounts_to_cards(uid),
+            "next": "POST /api/v1/plaid/sync to pull transactions"}
+
+
 @app.post("/api/v1/plaid/exchange-token")
 def plaid_exchange(body: ExchangeTokenIn):
-    if settings.demo_mode:
-        return {"ok": True, "demo": True, "message": "Demo mode: no Plaid token stored."}
+    if not settings.use_plaid:
+        return {"ok": True, "demo": True, "message": "Plaid is not configured; set PLAID_CLIENT_ID and PLAID_SECRET."}
 
     try:
         from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
@@ -475,8 +570,8 @@ def plaid_exchange(body: ExchangeTokenIn):
 @app.post("/api/v1/plaid/sync")
 def plaid_sync(body: SyncIn):
     started = perf_counter()
-    if settings.demo_mode:
-        return {"ok": True, "demo": True, "message": "Demo mode: use CSV ingestion or seeded transactions."}
+    if not settings.use_plaid:
+        return {"ok": True, "demo": True, "message": "Plaid is not configured; set PLAID_CLIENT_ID and PLAID_SECRET."}
 
     uid = _uid(body.userId)
     item_id = body.itemId
@@ -544,6 +639,8 @@ def plaid_sync(body: SyncIn):
             totals["removed"] += item_removed
 
         store.apply_subdoc_changes(uid, upserts=upserts, deletes=deletes)
+        # A card added after the bank was connected still needs attaching.
+        link_accounts_to_cards(uid)
         transactions = _rebuild_ingestion_from_store(uid)
         # Plaid connection should not wait for a Gemini advisory call. Existing
         # advice remains valid while deterministic totals and strategy refresh.
