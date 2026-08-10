@@ -8,18 +8,18 @@ from time import perf_counter
 from .agents.advisory import AdvisoryAgent
 from .agents.card_intelligence import CardIntelligenceAgent
 from .agents.forecast import ForecastAgent
-from .agents.ingestion import IngestionAgent
+from .agents.ingestion import IngestionAgent, is_eligible_purchase
 from .agents.runtime import GeminiRuntime
 from .agents.strategy import StrategyAgent, VALUATIONS
 from .models import Snapshot
 
 
-READ_MODEL_VERSION = 2
+READ_MODEL_VERSION = 4
 
 
 AGENTS = [
-    ("ingestion", "Ingestion"), ("forecast", "Forecast"),
-    ("card-intelligence", "Card intelligence"), ("strategy", "Simulation & strategy"),
+    ("ingestion", "Ingestion"), ("card-intelligence", "Card intelligence"),
+    ("strategy", "Simulation & strategy"), ("forecast", "Forecast"),
     ("advisory", "Advisory"),
 ]
 
@@ -31,6 +31,22 @@ def _numeric_advice_value(value) -> float:
     except (TypeError, ValueError):
         return 0.0
     return number if isfinite(number) else 0.0
+
+
+def transaction_totals(transactions) -> dict[str, float]:
+    """Separate purchase activity from credits without losing net direction."""
+    amounts = [
+        float(transaction.get("amount", 0))
+        for transaction in transactions
+        if is_eligible_purchase(transaction)
+    ]
+    spend = sum(amount for amount in amounts if amount > 0)
+    refunds = -sum(amount for amount in amounts if amount < 0)
+    return {
+        "spend": round(spend, 2),
+        "refunds": round(refunds, 2),
+        "netSpend": round(spend - refunds, 2),
+    }
 
 
 def project_catalog(store, uid, wallet):
@@ -81,34 +97,82 @@ class Orchestrator:
         self.advisory = AdvisoryAgent(runtime)
         self.cardintel = CardIntelligenceAgent(runtime)
 
-    def run(self, uid, request="Run CardSense", *, refresh_advice=True):
-        started, run_id = self._now(), uuid.uuid4().hex
+    def run(
+        self,
+        uid,
+        request="Run CardSense",
+        *,
+        refresh_advice=True,
+        refresh_card_intelligence=True,
+        run_id=None,
+    ):
+        started, run_id = self._now(), run_id or uuid.uuid4().hex
         transactions = self.store.get_subcollection(uid, "transactions")
         planned = self.store.get_subcollection(uid, "planned")
         wallet = self.store.get_wallet(uid)
 
-        # Card intelligence runs first and for real: any card whose recheck
+        # The feed has already been normalized at its cursor boundary. Start
+        # every run by auditing that canonical input before downstream agents
+        # consume it, so coverage failures appear in the correct stage/order.
+        stage_started = perf_counter()
+        self._start_stage(uid, run_id, "ingestion", "Ingestion", "transactions", ["plaid_items"])
+        ingest = self.ingestion.run(uid, self.store)
+        self._log(
+            uid, run_id, "ingestion", "Ingestion", "transactions", ["plaid_items"],
+            self.ingestion.degraded(ingest),
+            round((perf_counter() - stage_started) * 1000),
+            summary=(
+                f"{ingest['purchases']} posted purchases from {ingest['total']} transactions; "
+                f"{ingest['mccCoverage']:.0%} carry a merchant category code."
+            ),
+        )
+
+        # Card intelligence runs before pricing: any card whose recheck
         # date has passed is reread before the optimiser prices anything, so a
         # rate change propagates without anyone noticing manually.
         stage_started = perf_counter()
-        wallet, reread, card_notes = self._recheck_due(uid, wallet)
+        self._start_stage(uid, run_id, "card-intelligence", "Card intelligence", "card_rules", ["wallet"])
+        if refresh_card_intelligence:
+            wallet, reread, card_notes = self._recheck_due(uid, wallet)
+            card_summary = f"Reread {reread} of {len(wallet)} cards." if reread else "No cards were due a recheck."
+        else:
+            reread, card_notes = 0, []
+            card_summary = "Existing card rules retained during a deterministic account update."
         self._log(uid, run_id, "card-intelligence", "Card intelligence", "card_rules", ["wallet"],
                   card_notes, round((perf_counter() - stage_started) * 1000),
-                  summary=f"Reread {reread} of {len(wallet)} cards." if reread else "No cards were due a recheck.")
+                  summary=card_summary)
 
         rules = {card["cardId"]: (self.store.get_global_doc("card_rules", card["cardId"]) or {}).get("rules", []) for card in wallet}
-        summary = self._summary(transactions)
         stage_started = perf_counter()
-        forecast = self.forecast.run(summary, planned)
-        self.store.set_subdoc(uid, "forecasts", run_id, forecast)
-        self._log(uid, run_id, "forecast", "Forecast", "forecasts", ["transactions", "planned", "card_rules"], duration_ms=round((perf_counter() - stage_started) * 1000))
-        stage_started = perf_counter()
+        self._start_stage(uid, run_id, "strategy", "Simulation & strategy", "strategy_runs", ["transactions", "card_rules", "goal"])
         strategy = self.strategy.run(transactions, wallet, rules, self.store.get_user(uid).get("goal"))
         strategy["goal"] = self.strategy.goal_projection(self.store.get_user(uid).get("goal"), strategy["captured"])
         self.store.set_subdoc(uid, "strategy_runs", run_id, strategy)
-        self._log(uid, run_id, "strategy", "Simulation & strategy", "strategy_runs", ["transactions", "card_rules", "forecasts", "goal"], strategy.get("degraded"), round((perf_counter() - stage_started) * 1000))
+        self._log(uid, run_id, "strategy", "Simulation & strategy", "strategy_runs", ["transactions", "card_rules", "goal"], strategy.get("degraded"), round((perf_counter() - stage_started) * 1000))
+
+        stage_started = perf_counter()
+        self._start_stage(uid, run_id, "forecast", "Forecast", "forecasts", ["transactions", "planned", "card_rules", "strategy_runs"])
+        forecast = self.forecast.run(
+            transactions,
+            planned,
+            wallet,
+            rules,
+            leakage_rate=self._leakage_rate(transactions, strategy.get("unclaimed", 0)),
+        )
+        self.store.set_subdoc(uid, "forecasts", run_id, forecast)
+        self._log(
+            uid, run_id, "forecast", "Forecast", "forecasts",
+            ["transactions", "planned", "card_rules", "strategy_runs"],
+            self.forecast.degraded(forecast),
+            round((perf_counter() - stage_started) * 1000),
+            summary=(
+                f"Projected {forecast['projectedSpend']:.2f} over {forecast['horizonDays']} days "
+                f"from {forecast['historyDays']} days of history and {forecast['plannedSpend']:.2f} declared spend."
+            ),
+        )
         if refresh_advice:
             stage_started = perf_counter()
+            self._start_stage(uid, run_id, "advisory", "Advisory", "advice", ["strategy_runs", "forecasts"])
             advice = self.advisory.run(strategy, forecast, wallet)
             for item in advice:
                 item["impact"] = _numeric_advice_value(item.get("impact"))
@@ -119,6 +183,7 @@ class Orchestrator:
                 self.store.set_subdoc(uid, "advice", item["id"], item)
             self._log(uid, run_id, "advisory", "Advisory", "advice", ["strategy_runs", "advice"], duration_ms=round((perf_counter() - stage_started) * 1000))
         else:
+            self._start_stage(uid, run_id, "advisory", "Advisory", [], ["advice"])
             self._log(
                 uid,
                 run_id,
@@ -128,45 +193,90 @@ class Orchestrator:
                 ["advice"],
                 summary="Existing advice retained; deterministic state recalculated without a model call.",
             )
-        # Ingestion reports on the feed it has already normalised: how much of
-        # it can actually be matched to a card rule, and how much cannot.
-        ingest = self.ingestion.run(uid, self.store)
-        self._log(
-            uid, run_id, "ingestion", "Ingestion", "transactions", ["plaid_items"],
-            self.ingestion.degraded(ingest),
-            summary=(
-                f"{ingest['purchases']} purchases from {ingest['total']} transactions; "
-                f"{ingest['mccCoverage']:.0%} carry a merchant category code."
-            ),
-        )
         snapshot = self.project(uid, run_id)
         self.store.set_snapshot(uid, snapshot)
         self.store.set_user(uid, {"lastRunId": run_id, "lastRunAt": snapshot["generatedAt"]})
         return run_id, snapshot
+
+    def queue_run(self, uid, run_id):
+        """Persist a visible run before background execution begins."""
+        queued_at = self._now()
+        for agent, label in AGENTS:
+            self.store.write_agent_run(uid, f"{run_id}-{agent}", {
+                "id": f"{run_id}-{agent}",
+                "runId": run_id,
+                "agent": agent,
+                "label": label,
+                "status": "queued",
+                "startedAt": queued_at,
+                "durationMs": 0,
+                "summary": f"{label} queued.",
+                "detail": None,
+                "writes": [],
+                "reads": [],
+                "retryable": False,
+            })
 
     def empty_snapshot(self, uid):
         """Return a contract-valid initial read model without running agents."""
         return self.project(uid, "initial")
 
     def project_planned_change(self, uid, *, added=None, removed_id=None):
-        """Patch planned spending without rerunning the Firestore-heavy pipeline."""
+        """Reproject persisted plans without rerunning the full agent pipeline."""
         snapshot = self.store.get_snapshot(uid) or self.empty_snapshot(uid)
-        planned = [
-            item
-            for item in snapshot.get("planned", [])
-            if item.get("id") != removed_id
-        ]
-        if added is not None:
-            planned = [item for item in planned if item.get("id") != added.get("id")]
-            planned.append(added)
+        # The endpoint persists the mutation first. Reading the collection back
+        # makes this projection authoritative even when the previous snapshot
+        # was stale or another planned item was written between page loads.
+        planned = self.store.get_subcollection(uid, "planned")
         planned.sort(key=lambda item: str(item.get("startDate", "")))
 
+        transactions = self.store.get_subcollection(uid, "transactions")
+        wallet = self.store.get_wallet(uid)
+        rules = self._rules(wallet)
         snapshot["generatedAt"] = self._now()
         snapshot["planned"] = planned
-        snapshot["forecast"] = {
-            **snapshot["forecast"],
-            "timeline": self.forecast.timeline(planned),
+        snapshot["totals"] = {
+            **transaction_totals(transactions),
+            "captured": float(snapshot.get("totals", {}).get("captured", 0)),
+            "unclaimed": float(snapshot.get("totals", {}).get("unclaimed", 0)),
         }
+        snapshot["forecast"] = self.forecast.run(
+            transactions,
+            planned,
+            wallet,
+            rules,
+            leakage_rate=self._snapshot_leakage_rate(snapshot),
+        )
+        snapshot["cards"] = self.forecast.project_cards(transactions, wallet, rules)
+        snapshot["readModelVersion"] = READ_MODEL_VERSION
+        projected = Snapshot.model_validate(snapshot).model_dump(mode="json")
+        self.store.set_snapshot(uid, projected)
+        return projected
+
+    def refresh_forecast_projection(self, uid, snapshot):
+        """Upgrade an existing read model without running Gemini or all agents."""
+        transactions = self.store.get_subcollection(uid, "transactions")
+        planned = self.store.get_subcollection(uid, "planned")
+        wallet = self.store.get_wallet(uid)
+        rules = self._rules(wallet)
+        snapshot["generatedAt"] = self._now()
+        snapshot["readModelVersion"] = READ_MODEL_VERSION
+        snapshot["planned"] = planned
+        snapshot["wallet"] = wallet
+        snapshot["catalog"] = project_catalog(self.store, uid, wallet)
+        snapshot["totals"] = {
+            **transaction_totals(transactions),
+            "captured": float(snapshot.get("totals", {}).get("captured", 0)),
+            "unclaimed": float(snapshot.get("totals", {}).get("unclaimed", 0)),
+        }
+        snapshot["forecast"] = self.forecast.run(
+            transactions,
+            planned,
+            wallet,
+            rules,
+            leakage_rate=self._snapshot_leakage_rate(snapshot),
+        )
+        snapshot["cards"] = self.forecast.project_cards(transactions, wallet, rules)
         projected = Snapshot.model_validate(snapshot).model_dump(mode="json")
         self.store.set_snapshot(uid, projected)
         return projected
@@ -175,13 +285,17 @@ class Orchestrator:
         """Patch a goal projection using the captured value already in the snapshot."""
         snapshot = self.store.get_snapshot(uid) or self.empty_snapshot(uid)
         captured = float(snapshot.get("totals", {}).get("captured", 0))
-        projected_goal = self.strategy.goal_projection(goal, captured)
+        projected_goal = self.strategy.goal_projection(goal, captured) if goal else None
 
         snapshot["generatedAt"] = self._now()
         snapshot["goal"] = projected_goal
-        snapshot["trackPreference"] = goal["track"]
-        snapshot["recommendedTrack"] = goal["track"]
-        snapshot["trackRationale"] = "Optimised against your stated goal."
+        snapshot["trackPreference"] = goal["track"] if goal else None
+        snapshot["recommendedTrack"] = goal["track"] if goal else "cashback"
+        snapshot["trackRationale"] = (
+            "Optimised against your stated goal."
+            if goal else
+            "Cash back is the stated nominal-value baseline."
+        )
         projected = Snapshot.model_validate(snapshot).model_dump(mode="json")
         self.store.set_snapshot(uid, projected)
         return projected
@@ -218,23 +332,31 @@ class Orchestrator:
         transactions = self.store.get_subcollection(uid, "transactions")
         planned = self.store.get_subcollection(uid, "planned")
         wallet = self.store.get_wallet(uid)
-        forecast = self.store.get_subdoc(uid, "forecasts", run_id) or self.forecast.run(self._summary(transactions), planned)
         strategy = self.store.get_subdoc(uid, "strategy_runs", run_id) or {"categories": [], "captured": 0, "unclaimed": 0, "goal": None}
+        rules = self._rules(wallet)
+        forecast = self.store.get_subdoc(uid, "forecasts", run_id) or self.forecast.run(
+            transactions,
+            planned,
+            wallet,
+            rules,
+            leakage_rate=self._leakage_rate(transactions, strategy.get("unclaimed", 0)),
+        )
         advice = self.store.get_subcollection(uid, "advice")
         activity = sorted(self.store.get_subcollection(uid, "agent_runs"), key=lambda item: item.get("startedAt", ""))[-50:]
         latest = {entry["agent"]: entry for entry in activity if entry.get("runId") == run_id}
         agents = [{"id": ident, "label": label, "status": latest.get(ident, {}).get("status", "ok"), "lastRunAt": latest.get(ident, {}).get("startedAt", now), **({"note": latest[ident]["detail"]} if latest.get(ident, {}).get("detail") else {})} for ident, label in AGENTS]
-        cards = []
-        for card in wallet:
-            rules = (self.store.get_global_doc("card_rules", card["cardId"]) or {}).get("rules", [])
-            first = rules[0] if rules else {}
-            cards.append({"name": card["name"], "last4": card["last4"], "network": card["network"], "categoryLabel": first.get("categoryLabel", "Unverified"), "rate": first.get("rate", "—"), "cycleSpend": 0, "cap": first.get("cap"), "cycleLabel": first.get("cycleLabel", "no cap"), "state": "unverified" if card.get("parseStatus") != "parsed" else "healthy", **({"note": card["parseNote"]} if card.get("parseNote") else {})})
+        cards = self.forecast.project_cards(transactions, wallet, rules)
         captured = strategy["captured"]
         goal = strategy.get("goal")
         preferred = goal.get("track") if goal else None
         track = preferred or "cashback"
         record = self._track_record(advice)
-        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": {"spend": round(sum(float(t.get("amount", 0)) for t in transactions), 2), "captured": captured, "unclaimed": strategy["unclaimed"]}, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open"], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["strategy"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        totals = {
+            **transaction_totals(transactions),
+            "captured": captured,
+            "unclaimed": strategy["unclaimed"],
+        }
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open"], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
     def _recheck_due(self, uid, wallet):
@@ -283,11 +405,56 @@ class Orchestrator:
     def _summary(self, transactions):
         categories, monthly = {}, {}
         for tx in transactions:
+            if not is_eligible_purchase(tx):
+                continue
             category, amount = tx.get("category", "uncategorized"), float(tx.get("amount", 0))
             categories[category] = categories.get(category, 0) + amount
             if tx.get("date"):
                 month = str(tx["date"])[:7]; monthly[month] = monthly.get(month, 0) + amount
         return {"spend": sum(categories.values()), "categories": categories, "monthly": monthly}
+
+    def _rules(self, wallet):
+        return {
+            card["cardId"]: (
+                self.store.get_global_doc("card_rules", card["cardId"]) or {}
+            ).get("rules", [])
+            for card in wallet
+        }
+
+    def _leakage_rate(self, transactions, unclaimed) -> float:
+        spend = sum(
+            float(transaction.get("amount", 0))
+            for transaction in transactions
+            if is_eligible_purchase(transaction)
+        )
+        if spend <= 0:
+            return 0.0
+        return min(1.0, max(0.0, float(unclaimed or 0) / spend))
+
+    def _snapshot_leakage_rate(self, snapshot) -> float:
+        totals = snapshot.get("totals") or {}
+        # Leakage was originally calculated against signed (net) spend. Keep
+        # that behaviour now that `spend` explicitly means gross purchases.
+        spend = float(totals.get("netSpend", totals.get("spend")) or 0)
+        if spend <= 0:
+            return 0.0
+        return min(1.0, max(0.0, float(totals.get("unclaimed") or 0) / spend))
+
+    def _start_stage(self, uid, run_id, agent, label, writes, reads):
+        self.store.write_agent_run(uid, f"{run_id}-{agent}", {
+            "id": f"{run_id}-{agent}",
+            "runId": run_id,
+            "agent": agent,
+            "label": label,
+            "status": "running",
+            "startedAt": self._now(),
+            "durationMs": 0,
+            "summary": f"{label} is running.",
+            "detail": None,
+            "writes": writes,
+            "reads": reads,
+            "retryable": False,
+        })
 
     def _log(self, uid, run_id, agent, label, writes, reads, degraded=None, duration_ms=0, summary=None):
         detail = "; ".join(degraded or []) or None

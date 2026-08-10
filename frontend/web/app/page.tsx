@@ -30,7 +30,19 @@ export default async function SpendingAnalytics() {
 
         <p className="hero__sub">
           You banked {money(totals.captured)} on {money(totals.spend)} of
-          spending. The same purchases, routed to the best card you already
+          spending. {totals.refunds > 0 && (
+            <>
+              Refunds and credits total {money(totals.refunds)}. {totals.netSpend < 0 ? (
+                <>
+                  That is {money(Math.abs(totals.netSpend))} more in credits
+                  than purchases. {" "}
+                </>
+              ) : (
+                <>Net spending is {money(totals.netSpend)}. {" "}</>
+              )}
+            </>
+          )}
+          The same purchases, routed to the best card you already
           hold, would have returned {money(optimal)}. Nothing here asks you to
           open a new account.
         </p>

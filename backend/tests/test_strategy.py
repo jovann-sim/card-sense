@@ -31,3 +31,25 @@ def test_goal_projection_has_frontend_fields():
     out = StrategyAgent().goal_projection(goal, 10)
     assert out["pacePerMonth"] == 1000
     assert out["projectedAt"] is not None
+
+
+def test_strategy_prices_each_mcc_inside_a_broad_category():
+    wallet = [
+        {"cardId": "flight", "name": "Flight", "last4": "1111", "track": "cashback", "parseStatus": "parsed"},
+        {"cardId": "hotel", "name": "Hotel", "last4": "2222", "track": "cashback", "parseStatus": "parsed"},
+    ]
+    rules = {
+        "flight": [{"categoryLabel": "Flights", "mccCodes": ["4511"], "valuePerDollar": 0.05,
+                    "cap": None, "cycleLabel": "no cap"}],
+        "hotel": [{"categoryLabel": "Hotels", "mccCodes": ["7011"], "valuePerDollar": 0.02,
+                   "cap": None, "cycleLabel": "no cap"}],
+    }
+    transactions = [
+        {"category": "Travel", "mcc": "4511", "amount": 100},
+        {"category": "Travel", "mcc": "7011", "amount": 100},
+    ]
+
+    result = StrategyAgent().run(transactions, wallet, rules)
+
+    assert result["unclaimed"] == 7
+    assert len(result["categories"]) == 1

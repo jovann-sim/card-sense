@@ -1,6 +1,7 @@
 # Ingestion — state and what's next
 
-Branch: `feat/ingestion` · 2 commits on top of `main`
+Baseline: ingestion merge `60df0fe` on `main`, plus the correctness fixes in
+the current working tree.
 
 ## Working end to end
 
@@ -27,27 +28,33 @@ needs the Plaid Link UI. It refuses to run outside sandbox.
 | No account-to-card link | Auto-linked by mask, credit accounts only, manual endpoint for the rest |
 | Plaid coupled to `DEMO_MODE` | Gates on its own credentials, like Gemini |
 
+## Correctness fixes after the initial ingestion merge
+
+- The normal Plaid Link exchange now stores accounts and auto-links cards, not
+  only the `sandbox/seed` shortcut.
+- Forecast and headline totals exclude transfers, payments and pending rows;
+  refunds retain their negative sign and reduce spend.
+- Strategy prices each MCC bucket within a display category independently. A
+  mixed Travel category no longer prices hotels as flights merely because MCC
+  4511 appeared first.
+- The ingestion log measures account IDs against wallet links rather than only
+  checking whether Plaid supplied an account ID.
+- CSV uploads use the same ingestion code, retain MCCs and are idempotent.
+- Scheduled runs synchronize Plaid before recalculating when an Item exists.
+- The cards page exposes a Plaid credit-account selector for the cases that do
+  not auto-link uniquely.
+
 ## Known gaps, in priority order
 
-**1. Some rules do not match despite correct MCCs.** A sandbox run put $1,500
-of air travel (MCC 4511) on the base 1% rather than a card's 3% travel rule.
-Worth tracing `strategy._matches()` against a real extracted rule — the MCC is
-right on both sides, so the fault is in matching, and it directly understates
-the gap the whole product is about.
+**1. Some sandbox spend lands in "Uncategorised".** Mostly Plaid's
+`OTHER_OTHER`. A row with a Plaid-supplied MCC can still match a card rule, but
+one without a code has no useful label fallback. Either map more of the
+taxonomy or exclude fully unmapped spend rather than assuming a base rate.
 
-**2. $7,112 of sandbox spend lands in "Uncategorised".** Mostly Plaid's
-`OTHER_OTHER`. Those transactions can only match by category name, and
-"Uncategorised" matches nothing, so they all fall to the base rate. Either map
-more of the taxonomy or treat unmapped spend as excluded rather than base-rate.
-
-**3. Sandbox is US data.** USD amounts, US merchants. Against Singapore cards
+**2. Sandbox is US data.** USD amounts, US merchants. Against Singapore cards
 the currency and merchant names will look wrong on camera. Consider a seeded
 local dataset for the demo.
 
-**4. No UI for linking.** `GET /api/v1/plaid/accounts` lists accounts and which
-card each is attached to, and `POST /api/v1/cards/{id}/link-account` attaches
-one, but nothing in the interface calls either. Only needed when a mask and a
-last four genuinely differ.
-
-**5. Nothing schedules a sync.** `/api/v1/plaid/sync` is manual;
-`/api/v1/scheduler/run` exists but does not sync Plaid.
+**3. Inferred MCCs are representative.** A detailed Plaid category is stronger
+than a primary-category fallback, but both are currently eligible for matching.
+Keep `mccSource` visible when diagnosing a surprising recommendation.

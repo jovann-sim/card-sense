@@ -1,5 +1,3 @@
-import type { CardCap } from "./types";
-
 const DAYS_PER_MONTH = 30.44;
 
 /**
@@ -31,31 +29,4 @@ export function daysBetween(fromISO: string, toISO: string) {
 
 export function weeksBetween(fromISO: string, toISO: string) {
   return Math.round(daysBetween(fromISO, toISO) / 7);
-}
-
-/**
- * Whether a planned purchase would push a category past the cap on the card
- * that currently earns most there. This is the calculation that turns a
- * declared purchase into an actual warning.
- */
-export function findCapCollision(
-  category: string,
-  amount: number,
-  cards: CardCap[],
-) {
-  const head = category.split(" ")[0].toLowerCase();
-
-  const card = cards.find(
-    (c) => c.cap !== null && c.categoryLabel.toLowerCase().startsWith(head),
-  );
-  if (!card || card.cap === null) return null;
-
-  const after = card.cycleSpend + amount;
-  if (after <= card.cap) return null;
-
-  return {
-    card,
-    headroom: Math.max(0, card.cap - card.cycleSpend),
-    overBy: after - card.cap,
-  };
 }

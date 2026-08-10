@@ -11,6 +11,12 @@ from .config import settings
 log = logging.getLogger(__name__)
 
 class Store:
+    USER_COLLECTIONS = {
+        "transactions", "planned", "wallet", "catalog", "plaid_items",
+        "plaid_accounts", "forecasts", "strategy_runs", "advice",
+        "agent_runs", "snapshots",
+    }
+
     def __init__(self, persist: bool = False):
         """`persist` is opt-in so a bare Store() is always empty and isolated.
 
@@ -64,6 +70,33 @@ class Store:
         self.memory = {"users": {}, "card_rules": {}, "mcc_map": {}}
         self._snapshot_cache.clear()
         self._persist()
+
+    def clear_user(self, uid: str, *, preserve_collections: set[str] | None = None):
+        """Clear one user's operational state without deleting global rules."""
+        preserve = preserve_collections or set()
+        if self.db:
+            for collection in self.USER_COLLECTIONS - preserve:
+                documents = list(self._user_ref(uid).collection(collection).stream())
+                for offset in range(0, len(documents), 450):
+                    batch = self.db.batch()
+                    for document in documents[offset:offset + 450]:
+                        batch.delete(document.reference)
+                    batch.commit()
+            # User fields such as goal and lastRunAt live on the parent doc.
+            self._user_ref(uid).delete()
+        else:
+            existing = self.memory["users"].get(uid, {})
+            kept = {
+                collection: deepcopy(existing[collection])
+                for collection in preserve
+                if collection in existing
+            }
+            if kept:
+                self.memory["users"][uid] = kept
+            else:
+                self.memory["users"].pop(uid, None)
+            self._persist()
+        self._snapshot_cache.pop(uid, None)
 
     def _user_ref(self, uid: str):
         return self.db.collection("users").document(uid)

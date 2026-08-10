@@ -8,6 +8,11 @@ from pathlib import Path
 from ..plaid_taxonomy import classify
 
 
+def is_eligible_purchase(transaction: dict) -> bool:
+    """A posted purchase that should contribute to spend and reward figures."""
+    return transaction.get("isPurchase", True) is not False and not transaction.get("pending", False)
+
+
 class IngestionAgent:
     """Turns raw transaction feeds into the shape every other agent reasons about.
 
@@ -40,13 +45,18 @@ class IngestionAgent:
         stated_mcc = tx.get("merchant_category_code")
         mcc = str(stated_mcc) if stated_mcc else inferred_mcc
 
+        amount = float(tx.get("amount") or 0)
         return {
             "id": tx.get("transaction_id"),
             "source": "plaid",
             "accountId": tx.get("account_id"),
             "date": tx.get("date") or tx.get("authorized_date"),
             "merchant": tx.get("merchant_name") or tx.get("name") or "Unknown",
-            "amount": abs(float(tx.get("amount") or 0)),
+            # Plaid uses positive values for outflows and negative values for
+            # credits. Preserve the sign so a refund reduces spend instead of
+            # becoming a second purchase.
+            "amount": amount,
+            "isRefund": amount < 0,
             "category": label,
             "mcc": mcc,
             "mccSource": "plaid" if stated_mcc else ("inferred" if inferred_mcc else None),
@@ -65,16 +75,29 @@ class IngestionAgent:
             "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
 
-    def summarise(self, transactions: list[dict]) -> dict:
+    def summarise(
+        self,
+        transactions: list[dict],
+        linked_account_ids: set[str] | None = None,
+    ) -> dict:
         """What the run log reports, and what makes coverage gaps visible."""
-        purchases = [t for t in transactions if t.get("isPurchase", True)]
+        purchases = [t for t in transactions if is_eligible_purchase(t)]
+        pending = [t for t in transactions if t.get("pending", False)]
+        excluded = [
+            t for t in transactions
+            if t.get("isPurchase", True) is False and not t.get("pending", False)
+        ]
         with_mcc = [t for t in purchases if t.get("mcc")]
         from_plaid = [t for t in purchases if t.get("mccSource") == "plaid"]
-        unmapped = [t for t in purchases if not t.get("accountId")]
+        if linked_account_ids is None:
+            unmapped = [t for t in purchases if not t.get("accountId")]
+        else:
+            unmapped = [t for t in purchases if t.get("accountId") not in linked_account_ids]
         return {
             "total": len(transactions),
             "purchases": len(purchases),
-            "excluded": len(transactions) - len(purchases),
+            "excluded": len(excluded),
+            "pending": len(pending),
             "withMcc": len(with_mcc),
             "mccFromPlaid": len(from_plaid),
             "mccInferred": len(with_mcc) - len(from_plaid),
@@ -92,6 +115,11 @@ class IngestionAgent:
                 f"{missing} of {summary['purchases']} purchases carry no merchant category code, "
                 "so they can only be matched to card rules by category name."
             )
+        if summary["unlinkedToCard"]:
+            notes.append(
+                f"{summary['unlinkedToCard']} purchases belong to Plaid accounts that are not linked "
+                "to a wallet card, so actual rewards cannot be attributed."
+            )
         return notes
 
     def run(self, uid: str, store) -> dict:
@@ -102,7 +130,8 @@ class IngestionAgent:
         what the rest of the pipeline depends on.
         """
         transactions = store.get_subcollection(uid, "transactions")
-        return self.summarise(transactions)
+        linked = {card["accountId"] for card in store.get_wallet(uid) if card.get("accountId")}
+        return self.summarise(transactions, linked_account_ids=linked)
 
     # -- csv ---------------------------------------------------------------
 
@@ -115,27 +144,32 @@ class IngestionAgent:
         rows = []
         for path in directory.glob("*.csv"):
             with path.open(encoding="utf-8-sig", newline="") as handle:
-                for record in csv.DictReader(handle):
-                    amount = self._amount(record)
-                    if amount <= 0:
-                        continue
-                    rows.append({
-                        "source": "csv",
-                        "source_file": path.name,
-                        "amount": amount,
-                        "date": self._date(record),
-                        "category": self._text(record, ["category", "type", "group"], "Uncategorised"),
-                        "merchant": self._text(record, ["merchant", "payee", "name", "description"], "unknown"),
-                        "description": self._text(record, ["description", "memo", "details"], ""),
-                        "mcc": self._text(record, ["mcc", "merchant_category_code"], "") or None,
-                        "isPurchase": True,
-                    })
+                rows.extend(self.import_csv_records(uid, store, csv.DictReader(handle), path.name))
+        return rows
 
-        for row in rows:
-            # A statement row carries no upstream id, so a stable hash of its
-            # identifying fields keeps re-imports idempotent.
-            key = f"{row['source_file']}:{row['date']}:{row['merchant']}:{row['amount']}"
-            store.set_subdoc(uid, "transactions", hashlib.sha256(key.encode()).hexdigest(), row)
+    def import_csv_records(self, uid: str, store, records, filename: str) -> list[dict]:
+        """Normalise uploaded CSV records through the same canonical shape."""
+        rows = []
+        for record in records:
+            amount = self._amount(record)
+            if amount <= 0:
+                continue
+            row = {
+                "source": "csv",
+                "source_file": filename,
+                "amount": amount,
+                "date": self._date(record),
+                "category": self._text(record, ["category", "type", "group"], "Uncategorised"),
+                "merchant": self._text(record, ["merchant", "payee", "name", "description"], "unknown"),
+                "description": self._text(record, ["description", "memo", "details"], ""),
+                "mcc": self._text(record, ["mcc", "merchant_category_code"], "") or None,
+                "isPurchase": True,
+                "pending": False,
+            }
+            key = f"{filename}:{row['date']}:{row['merchant']}:{row['amount']}"
+            row["id"] = hashlib.sha256(key.encode()).hexdigest()
+            store.set_subdoc(uid, "transactions", row["id"], row)
+            rows.append(row)
         return rows
 
     def _amount(self, record):

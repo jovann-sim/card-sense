@@ -8,7 +8,7 @@ import uuid
 import logging
 from time import perf_counter
 
-from fastapi import FastAPI, HTTPException, Header, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.terms import document_from_upload
@@ -29,12 +29,11 @@ from .models import (
     RunResponse,
     CardResponse,
 )
-from .orchestrator import Orchestrator, project_catalog
+from .orchestrator import AGENTS, Orchestrator, READ_MODEL_VERSION, project_catalog
 from .plaid_client import get_plaid_client
 
 app = FastAPI(title="CardSense Backend", version="0.2.0")
 logger = logging.getLogger("cardsense")
-READ_MODEL_VERSION = 2
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[x.strip() for x in settings.cors_origins.split(",")],
@@ -143,21 +142,73 @@ def link_accounts_to_cards(uid: str) -> list[dict]:
     """
     accounts = store.get_subcollection(uid, "plaid_accounts")
     linked = []
+    claimed = {card["accountId"] for card in store.get_wallet(uid) if card.get("accountId")}
     for card in store.get_wallet(uid):
         if card.get("accountId"):
             continue
-        match = next(
-            (a for a in accounts
-             if a.get("mask") and card.get("last4")
-             and str(a["mask"]) == str(card["last4"])
-             and "credit" in f"{a.get('type')} {a.get('subtype')}".lower()),
-            None,
-        )
-        if not match:
+        matches = [
+            account for account in accounts
+            if account.get("mask") and card.get("last4")
+            and str(account["mask"]) == str(card["last4"])
+            and "credit" in f"{account.get('type')} {account.get('subtype')}".lower()
+            and account["id"] not in claimed
+        ]
+        # A guessed link is worse than asking. Only automate a unique match.
+        if len(matches) != 1:
             continue
+        match = matches[0]
         store.set_subdoc(uid, "wallet", card["cardId"], {"accountId": match["id"]})
+        claimed.add(match["id"])
         linked.append({"cardId": card["cardId"], "accountId": match["id"], "mask": match["mask"]})
     return linked
+
+
+def _remove_plaid_item_remote(item: dict) -> bool:
+    """Revoke one Plaid Item when credentials are available."""
+    if not settings.use_plaid:
+        return False
+    from plaid.model.item_remove_request import ItemRemoveRequest
+
+    client = get_plaid_client()
+    client.item_remove(ItemRemoveRequest(access_token=item["accessToken"]))
+    return True
+
+
+def _delete_plaid_item_data(uid: str, item: dict) -> dict:
+    """Remove one Item's local accounts, transactions and wallet links."""
+    item_id = item.get("id") or item.get("itemId")
+    accounts = [
+        account for account in store.get_subcollection(uid, "plaid_accounts")
+        if account.get("itemId") == item_id
+    ]
+    account_ids = {account["id"] for account in accounts}
+    transactions = [
+        transaction for transaction in store.get_subcollection(uid, "transactions")
+        if transaction.get("source") == "plaid" and transaction.get("accountId") in account_ids
+    ]
+    advice = store.get_subcollection(uid, "advice")
+    upserts = [
+        ("wallet", card["cardId"], {"accountId": None})
+        for card in store.get_wallet(uid)
+        if card.get("accountId") in account_ids
+    ]
+    deletes = [
+        ("plaid_accounts", account["id"])
+        for account in accounts
+    ] + [
+        ("transactions", transaction["id"])
+        for transaction in transactions
+    ] + [
+        ("advice", recommendation["id"])
+        for recommendation in advice
+    ] + [("plaid_items", item_id)]
+    store.apply_subdoc_changes(uid, upserts=upserts, deletes=deletes)
+    return {
+        "accountsRemoved": len(accounts),
+        "transactionsRemoved": len(transactions),
+        "cardsUnlinked": len(upserts),
+        "adviceCleared": len(advice),
+    }
 
 
 def _rebuild_ingestion_from_store(uid: str) -> list[dict]:
@@ -227,10 +278,10 @@ def snapshot():
     if not snap:
         snap = orch.empty_snapshot(UID)
     elif snap.get("readModelVersion") != READ_MODEL_VERSION:
-        # Older snapshots need one live-wallet join. Persist the migrated read
-        # model so ordinary page loads remain a single Firestore document read.
-        snap = _normalise_snapshot_wallet(snap)
-        store.set_snapshot(UID, snap)
+        # Recompute deterministic forecast fields and refresh the authoritative
+        # wallet projection without invoking Gemini or a full agent run.
+        migration_orchestrator = orch if orch.store is store else Orchestrator(store)
+        snap = migration_orchestrator.refresh_forecast_projection(UID, snap)
     logger.info("snapshot uid=%s duration_ms=%d persisted=%s", UID, round((perf_counter() - started) * 1000), persisted)
     return snap
 
@@ -241,13 +292,68 @@ def run_agents(body: RunIn):
     return {"runId": run_id, "snapshot": snap}
 
 
+def _execute_background_run(active_orchestrator: Orchestrator, run_id: str, request: str):
+    try:
+        active_orchestrator.run(UID, request, run_id=run_id)
+    except Exception as exc:
+        logger.exception("background agent run failed run_id=%s", run_id)
+        entries = [
+            entry for entry in store.get_subcollection(UID, "agent_runs")
+            if entry.get("runId") == run_id
+        ]
+        failed = next((entry for entry in entries if entry.get("status") == "running"), None)
+        failed = failed or next((entry for entry in entries if entry.get("status") == "queued"), None)
+        if failed:
+            store.write_agent_run(UID, failed["id"], {
+                "status": "failed",
+                "summary": f"{failed.get('label') or failed.get('agent')} failed.",
+                "detail": str(exc)[:300],
+                "retryable": True,
+            })
+
+
+@app.post("/api/v1/runs/async", status_code=202)
+def start_agent_run(body: RunIn, background_tasks: BackgroundTasks):
+    """Queue a real run and return its ID before agent work starts."""
+    run_id = uuid.uuid4().hex
+    active_orchestrator = orch if orch.store is store else Orchestrator(store)
+    active_orchestrator.queue_run(UID, run_id)
+    background_tasks.add_task(_execute_background_run, active_orchestrator, run_id, body.request)
+    return {"runId": run_id, "status": "queued"}
+
+
 @app.get("/api/v1/runs/{run_id}")
 def run_status(run_id: str):
-    data = store.get_subcollection(UID, "agent_runs")
-    row = next((x for x in data if x.get("id") == run_id), None)
-    if not row:
+    data = [
+        entry for entry in store.get_subcollection(UID, "agent_runs")
+        if entry.get("runId") == run_id
+    ]
+    if not data:
         raise HTTPException(404, "Run not found")
-    return row
+    order = {agent: index for index, (agent, _label) in enumerate(AGENTS)}
+    labels = dict(AGENTS)
+    data.sort(key=lambda entry: order.get(entry.get("agent"), len(order)))
+    statuses = {entry.get("status") for entry in data}
+    if "failed" in statuses:
+        status = "failed"
+    elif len(data) == len(AGENTS) and statuses <= {"ok", "degraded"}:
+        status = "complete"
+    elif "running" in statuses:
+        status = "running"
+    else:
+        status = "queued"
+    return {
+        "runId": run_id,
+        "status": status,
+        "agents": [{
+            "id": entry["agent"],
+            "label": entry.get("label") or labels.get(entry["agent"], entry["agent"]),
+            "status": entry.get("status", "queued"),
+            "summary": entry.get("summary"),
+            "detail": entry.get("detail"),
+            "durationMs": entry.get("durationMs", 0),
+        } for entry in data],
+    }
 
 
 @app.post("/api/v1/planned", response_model=Snapshot)
@@ -268,6 +374,12 @@ def set_goal(body: GoalIn):
     goal = body.model_dump(mode="json")
     store.set_user(UID, {"goal": goal})
     return orch.project_goal_change(UID, goal)
+
+
+@app.delete("/api/v1/goals", response_model=Snapshot)
+def clear_goal():
+    store.set_user(UID, {"goal": None})
+    return orch.project_goal_change(UID, None)
 
 
 @app.post("/api/v1/advice/{advice_id}/resolve", response_model=Snapshot)
@@ -400,8 +512,18 @@ def link_card_account(card_id: str, body: dict):
     account_id = (body or {}).get("accountId")
     if not account_id:
         raise HTTPException(400, "accountId is required")
-    if not store.get_subdoc(UID, "plaid_accounts", account_id):
+    account = store.get_subdoc(UID, "plaid_accounts", account_id)
+    if not account:
         raise HTTPException(404, "No such Plaid account for this user")
+    if "credit" not in f"{account.get('type')} {account.get('subtype')}".lower():
+        raise HTTPException(400, "Only a Plaid credit account can be linked to a card")
+    linked_elsewhere = next(
+        (item for item in store.get_wallet(UID)
+         if item.get("accountId") == account_id and item.get("cardId") != card_id),
+        None,
+    )
+    if linked_elsewhere:
+        raise HTTPException(409, f"That account is already linked to {linked_elsewhere['name']}")
 
     store.set_subdoc(UID, "wallet", card_id, {"accountId": account_id})
     _, snap = orch.run(UID, "Recalculate after linking an account", refresh_advice=False)
@@ -416,6 +538,28 @@ def plaid_accounts():
     return [
         {**account, "linkedCard": (by_account.get(account["id"]) or {}).get("name")}
         for account in store.get_subcollection(UID, "plaid_accounts")
+    ]
+
+
+@app.get("/api/v1/plaid/items")
+def plaid_items():
+    """Connected Items safe to show in an account-management interface."""
+    accounts = store.get_subcollection(UID, "plaid_accounts")
+    account_counts: dict[str, int] = {}
+    for account in accounts:
+        item_id = account.get("itemId")
+        if item_id:
+            account_counts[item_id] = account_counts.get(item_id, 0) + 1
+    return [
+        {
+            "itemId": item.get("id") or item.get("itemId"),
+            "institutionId": item.get("institutionId"),
+            "institutionName": item.get("institutionName"),
+            "createdAt": item.get("createdAt"),
+            "lastSyncedAt": item.get("lastSyncedAt"),
+            "accounts": account_counts.get(item.get("id") or item.get("itemId"), 0),
+        }
+        for item in store.get_subcollection(UID, "plaid_items")
     ]
 
 
@@ -558,11 +702,15 @@ def plaid_exchange(body: ExchangeTokenIn):
                 "itemId": item_id,
                 "accessToken": access_token,
                 "cursor": None,
+                "institutionId": body.institutionId,
+                "institutionName": body.institutionName,
                 "createdAt": datetime.now(timezone.utc).isoformat(),
             },
         )
+        accounts = _store_plaid_accounts(uid, client, access_token, item_id)
+        linked = link_accounts_to_cards(uid)
 
-        return {"ok": True, "itemId": item_id}
+        return {"ok": True, "itemId": item_id, "accounts": len(accounts), "linked": linked}
     except Exception as exc:
         raise _plaid_error(exc)
 
@@ -590,6 +738,9 @@ def plaid_sync(body: SyncIn):
         deletes: list[tuple[str, str]] = []
 
         for item in items:
+            # Backfill accounts for Items created before account persistence was
+            # added, and refresh masks/names when Plaid changes them.
+            _store_plaid_accounts(uid, client, item["accessToken"], item["id"])
             current_cursor = body.cursor if body.cursor is not None else item.get("cursor")
             has_more = True
             item_added = item_modified = item_removed = 0
@@ -666,10 +817,85 @@ def plaid_sync(body: SyncIn):
         raise _plaid_error(exc)
 
 
+@app.delete("/api/v1/plaid/items/{item_id}")
+def disconnect_plaid_item(item_id: str):
+    """Revoke one bank connection and remove only the data it supplied."""
+    item = store.get_subdoc(UID, "plaid_items", item_id)
+    if not item:
+        raise HTTPException(404, "No such Plaid Item for this user")
+    if not settings.use_plaid:
+        raise HTTPException(503, "Plaid credentials are required to revoke this Item safely")
+    try:
+        plaid_removed = _remove_plaid_item_remote(item)
+        removed = _delete_plaid_item_data(UID, item)
+        active_orchestrator = orch if orch.store is store else Orchestrator(store)
+        run_id, snapshot = active_orchestrator.run(
+            UID,
+            "Recalculate after disconnecting a Plaid Item",
+            refresh_advice=False,
+            refresh_card_intelligence=False,
+        )
+        return {
+            "ok": True,
+            "itemId": item_id,
+            "plaidRemoved": plaid_removed,
+            **removed,
+            "runId": run_id,
+            "snapshot": snapshot,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Keep the token and local records when remote revocation fails so the
+        # user can retry instead of being left with an unreachable active Item.
+        raise _plaid_error(exc)
+
+
+@app.post("/api/v1/demo/reset")
+def reset_demo(x_internal_secret: str | None = Header(default=None)):
+    """Return the single-user sandbox demo to a fresh zero-value snapshot."""
+    if x_internal_secret != settings.internal_run_secret:
+        raise HTTPException(401, "Unauthorized")
+    if not settings.demo_mode or settings.plaid_env.lower() != "sandbox":
+        raise HTTPException(403, "Demo reset is available only in DEMO_MODE with Plaid Sandbox")
+
+    items = store.get_subcollection(UID, "plaid_items")
+    removed_items, disconnect_errors = 0, []
+    for item in items:
+        try:
+            if _remove_plaid_item_remote(item):
+                removed_items += 1
+        except Exception as exc:
+            item_id = item.get("id") or item.get("itemId")
+            logger.warning("demo_reset Plaid removal failed item_id=%s error=%s", item_id, exc)
+            disconnect_errors.append({
+                "itemId": item_id,
+                "error": "Plaid Item removal failed; local demo state was still cleared.",
+            })
+
+    # Reset must remain useful if Sandbox is unavailable. Remote errors are
+    # returned visibly, while all local user state is still cleared.
+    store.clear_user(UID, preserve_collections={"catalog"})
+    active_orchestrator = orch if orch.store is store else Orchestrator(store)
+    snapshot = active_orchestrator.empty_snapshot(UID)
+    store.set_snapshot(UID, snapshot)
+    return {
+        "ok": True,
+        "itemsFound": len(items),
+        "plaidItemsRemoved": removed_items,
+        "disconnectErrors": disconnect_errors,
+        "snapshot": snapshot,
+    }
+
+
 @app.post("/api/v1/scheduler/run")
 def scheduled_run(x_internal_secret: str | None = Header(default=None)):
     if x_internal_secret != settings.internal_run_secret:
         raise HTTPException(401, "Unauthorized")
+    if settings.use_plaid and store.get_subcollection(UID, "plaid_items"):
+        synced = plaid_sync(SyncIn(userId=UID))
+        return {"runId": synced["runId"], "generatedAt": synced["snapshot"]["generatedAt"],
+                "plaid": {key: synced[key] for key in ("added", "modified", "removed")}}
     run_id, snap = orch.run(UID, "Scheduled autonomous CardSense run")
     return {"runId": run_id, "generatedAt": snap["generatedAt"]}
 
@@ -677,29 +903,8 @@ def scheduled_run(x_internal_secret: str | None = Header(default=None)):
 @app.post("/api/v1/import/csv")
 async def import_csv(file: UploadFile = File(...)):
     content = (await file.read()).decode("utf-8-sig")
-    rows = []
-    for r in csv.DictReader(io.StringIO(content)):
-        amount = 0
-        for key in ["amount", "transaction_amount", "debit", "withdrawal", "expense", "value"]:
-            if r.get(key):
-                try:
-                    amount = abs(float(str(r[key]).replace(",", "").replace("$", "")))
-                    break
-                except Exception:
-                    pass
-        if amount > 0:
-            rows.append({
-                "source_file": file.filename,
-                "source": "csv",
-                "amount": amount,
-                "date": r.get("date") or r.get("posted_date"),
-                "category": r.get("category") or r.get("type") or "uncategorized",
-                "merchant": r.get("merchant") or r.get("payee") or r.get("name") or "unknown",
-                "description": r.get("description") or "",
-            })
-
-    for row in rows:
-        row["id"] = uuid.uuid4().hex
-        store.set_subdoc(UID, "transactions", row["id"], row)
+    rows = orch.ingestion.import_csv_records(
+        UID, store, csv.DictReader(io.StringIO(content)), file.filename or "statement.csv"
+    )
     run_id, snap = orch.run(UID, "Analyse imported bank statement")
     return {"imported": len(rows), "runId": run_id, "snapshot": snap}
