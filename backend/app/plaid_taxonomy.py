@@ -129,3 +129,17 @@ def classify(pfc_primary: str | None, pfc_detailed: str | None) -> tuple[str | N
         return mcc, label, True
 
     return None, "Uncategorised", True
+
+
+# Spending that a payment intermediary such as CardUp can route onto a credit
+# card for a fee. It earns nothing today because the biller does not take cards,
+# but it is not junk data — it is the largest untapped category most people
+# have, and the strategy agent should later weigh the fee against the reward.
+REDIRECTABLE_CATEGORIES = {
+    "Rent", "Utilities", "Insurance", "Education", "Government", "Medical",
+}
+
+
+def is_redirectable(category: str | None, is_purchase: bool) -> bool:
+    """Could this spending be moved onto a card through a payment service?"""
+    return bool(is_purchase and category in REDIRECTABLE_CATEGORIES)
