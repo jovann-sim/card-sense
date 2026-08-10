@@ -644,6 +644,19 @@ def plaid_sandbox_seed(body: LinkTokenIn):
     if (settings.plaid_env or "sandbox").lower() != "sandbox":
         raise HTTPException(400, "This endpoint only exists for the sandbox environment.")
 
+    # Each seed mints a NEW Item with new account and transaction ids, so the
+    # same synthetic purchases arrive again under different identities and
+    # nothing dedupes them. Seeding four times quadrupled reported spend.
+    # Clearing first makes reseeding idempotent, which is what a test loop needs.
+    uid_to_clear = _uid(body.userId)
+    for collection in ("plaid_items", "plaid_accounts", "transactions"):
+        for row in store.get_subcollection(uid_to_clear, collection):
+            if row.get("id"):
+                store.delete_subdoc(uid_to_clear, collection, row["id"])
+    for card in store.get_wallet(uid_to_clear):
+        if card.get("accountId"):
+            store.set_subdoc(uid_to_clear, "wallet", card["cardId"], {"accountId": None})
+
     from plaid.model.products import Products
     from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
 
@@ -795,10 +808,14 @@ def plaid_sync(body: SyncIn):
         transactions = _rebuild_ingestion_from_store(uid)
         # Plaid connection should not wait for a Gemini advisory call. Existing
         # advice remains valid while deterministic totals and strategy refresh.
+        # Skipping the model keeps a bank connection fast, but that is only
+        # safe when there is advice to retain. On a first sync there is none,
+        # so the dashboard would show nothing to do and a track record of
+        # "0 of 0", which reads as broken rather than as an optimisation.
         run_id, snap = orch.run(
             uid,
             "Analyse newly synced Plaid transactions",
-            refresh_advice=False,
+            refresh_advice=not store.get_subcollection(uid, "advice"),
         )
         logger.info("plaid_sync uid=%s duration_ms=%d added=%d modified=%d removed=%d", uid, round((perf_counter() - started) * 1000), totals["added"], totals["modified"], totals["removed"])
 
