@@ -18,9 +18,14 @@ const requiredSnapshotKeys = [
 function isSnapshot(value: unknown): value is Snapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
+  const totals = candidate.totals as Record<string, unknown> | undefined;
   return requiredSnapshotKeys.every((key) => key in candidate) &&
     typeof candidate.generatedAt === "string" &&
     typeof candidate.recommendedTrack === "string" &&
+    !!totals &&
+    typeof totals.spend === "number" &&
+    typeof totals.refunds === "number" &&
+    typeof totals.netSpend === "number" &&
     Array.isArray(candidate.agents) &&
     Array.isArray(candidate.recommendations) &&
     Array.isArray(candidate.categories) &&

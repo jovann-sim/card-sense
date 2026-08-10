@@ -1280,6 +1280,174 @@ body {
   padding: 0 0.35rem;
 }
 
+/* ================================================ Plaid connections ====== */
+
+.connections {
+  display: grid;
+  gap: 1rem;
+}
+
+.connections__intro {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 0.5rem;
+}
+
+.connections__status {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--slate);
+}
+
+.connections__tools {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 0.75rem;
+}
+
+.connections__empty {
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  color: var(--slate);
+}
+
+.connections__empty p + p {
+  margin-top: 0.4rem;
+  font-size: 0.8125rem;
+}
+
+.connection {
+  background: var(--paper);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+
+.connection__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+  padding-bottom: 0.875rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.connection__name {
+  font-family: var(--font-display);
+  font-variation-settings: "wdth" 104;
+  font-weight: 650;
+  font-size: 1.125rem;
+}
+
+.connection__meta,
+.connection__account-meta {
+  margin-top: 0.15rem;
+  font-size: 0.6875rem;
+  color: var(--slate);
+}
+
+.connection__state,
+.connection__account-state {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.connection__state,
+.connection__account[data-state="linked"] .connection__account-state {
+  color: var(--verdigris);
+}
+
+.connection__account[data-state="unmatched"] .connection__account-state {
+  color: var(--brass-deep);
+}
+
+.connection__account[data-state="ineligible"] .connection__account-state {
+  color: var(--slate-soft);
+}
+
+.connection__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem 3rem;
+  padding-block: 0.875rem;
+}
+
+.connection__facts div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.connection__facts dt {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+}
+
+.connection__facts dd {
+  font-size: 0.75rem;
+}
+
+.connection__accounts {
+  list-style: none;
+  border-top: 1px solid var(--hairline);
+}
+
+.connection__account {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding-block: 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.connection__account-name {
+  font-size: 0.875rem;
+}
+
+.connection__account--empty {
+  color: var(--slate-soft);
+  font-size: 0.8125rem;
+}
+
+.connection__actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.connection__disconnect:hover:not(:disabled) {
+  color: var(--ember);
+  border-color: var(--ember);
+}
+
+@media (max-width: 40rem) {
+  .tabs {
+    overflow-x: auto;
+  }
+
+  .connections__intro,
+  .connection__account {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .connections__tools {
+    align-items: start;
+    justify-content: start;
+    flex-direction: column;
+  }
+}
+
 /* ============================================================ wallet ====== */
 
 .wallet {

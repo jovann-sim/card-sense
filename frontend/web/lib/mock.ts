@@ -20,6 +20,8 @@ export const snapshot: Snapshot = {
 
   totals: {
     spend: 14_480.55,
+    refunds: 0,
+    netSpend: 14_480.55,
     captured: 198.65,
     unclaimed: 219.85,
   },
@@ -336,7 +338,11 @@ export const snapshot: Snapshot = {
 
   forecast: {
     horizonDays: 30,
+    baselineSpend: 3_420,
+    plannedSpend: 1_400,
     projectedSpend: 4_820,
+    historyDays: 42,
+    quality: "good",
     confidence: 610,
     basis:
       "Six weeks of transaction history, plus one event you declared. Not seasonality — there is not enough history yet to claim that.",

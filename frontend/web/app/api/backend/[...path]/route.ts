@@ -28,9 +28,21 @@ async function forward(request: NextRequest, { params }: Context) {
       cache: "no-store",
     });
     const responseBody = await upstream.arrayBuffer();
-    if (upstream.ok && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    let completedRun = false;
+    if (upstream.ok && request.method === "GET" && path.slice(0, 3).join("/") === "api/v1/runs") {
+      try {
+        const payload = JSON.parse(new TextDecoder().decode(responseBody)) as { status?: string };
+        completedRun = payload.status === "complete";
+      } catch {
+        completedRun = false;
+      }
+    }
+    if (upstream.ok && (
+      completedRun || !["GET", "HEAD", "OPTIONS"].includes(request.method)
+    )) {
       // Route handlers cannot use updateTag, so expire immediately to preserve
-      // read-after-write behavior for the router.refresh() that follows.
+      // read-after-write behavior for the router.refresh() that follows. A
+      // background run invalidates once more when its completion is observed.
       revalidateTag(SNAPSHOT_CACHE_TAG, { expire: 0 });
     }
     return new Response(responseBody, {

@@ -41,7 +41,12 @@ export interface Period {
 }
 
 export interface Totals {
+  /** Posted purchase outflows, excluding refunds and credits. */
   spend: number;
+  /** Absolute value of posted refunds and credits. */
+  refunds: number;
+  /** Gross spending minus refunds and credits. */
+  netSpend: number;
   /** Rewards earned, in nominal dollars. */
   captured: number;
   /** Rewards the optimal card choice would have earned, minus captured. */
@@ -137,7 +142,11 @@ export interface TimelineEntry {
 
 export interface Forecast {
   horizonDays: number;
+  baselineSpend: number;
+  plannedSpend: number;
   projectedSpend: number;
+  historyDays: number;
+  quality: "none" | "limited" | "good";
   /** Plus or minus, in dollars. Stated rather than hidden. */
   confidence: number;
   basis: string;
@@ -289,6 +298,8 @@ export interface CardDetail {
   walletId?: string;
   /** Legacy Firestore document ID retained in older snapshots. */
   id?: string;
+  /** Plaid credit account whose transactions were made on this card. */
+  accountId?: string | null;
   name: string;
   last4: string;
   network: string;

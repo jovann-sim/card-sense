@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type { CardDetail, CatalogCard, ParseStatus, Snapshot } from "@/lib/types";
-import { dayMonth, money, moneyIn } from "@/lib/format";
-import { api } from "@/lib/client-api";
+import { dayMonth, money, moneyIn, timeOfDay } from "@/lib/format";
+import { api, userId } from "@/lib/client-api";
 import { AddCardFlow } from "./AddCardFlow";
 
 const PARSE_LABEL: Record<ParseStatus, string> = {
@@ -13,18 +14,184 @@ const PARSE_LABEL: Record<ParseStatus, string> = {
   failed: "Rules unread",
 };
 
+type PlaidAccount = {
+  id: string;
+  itemId: string;
+  mask?: string | null;
+  name?: string | null;
+  officialName?: string | null;
+  type?: string;
+  subtype?: string;
+  linkedCard?: string | null;
+};
+
+type PlaidItem = {
+  itemId: string;
+  institutionId?: string | null;
+  institutionName?: string | null;
+  createdAt?: string | null;
+  lastSyncedAt?: string | null;
+  accounts: number;
+};
+
+function PlaidConnections({
+  items,
+  accounts,
+  loading,
+  syncing,
+  disconnecting,
+  status,
+  onSync,
+  onDisconnect,
+}: {
+  items: PlaidItem[];
+  accounts: PlaidAccount[];
+  loading: boolean;
+  syncing: string | null;
+  disconnecting: string | null;
+  status: string | null;
+  onSync: (item: PlaidItem) => void;
+  onDisconnect: (item: PlaidItem) => void;
+}) {
+  if (loading) {
+    return <p className="connections__status" role="status">Loading Plaid connections…</p>;
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="connections__empty">
+        <p>No Plaid institution is connected.</p>
+        <p>Connect a credit account before assigning its transactions to a wallet card.</p>
+        <Link className="btn btn--small" href="/">Connect an account</Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="connections">
+      <div className="connections__intro">
+        <div>
+          <h2 className="section__label">Plaid connections</h2>
+          <p className="section__note">
+            Plaid supplies accounts and transactions. Wallet cards supply the reward rules used to price them.
+          </p>
+        </div>
+        <div className="connections__tools">
+          {status && <p className="connections__status" role="status">{status}</p>}
+          <Link className="btn btn--small btn--quiet" href="/">Connect another account</Link>
+        </div>
+      </div>
+
+      {items.map((item) => {
+        const itemAccounts = accounts.filter((account) => account.itemId === item.itemId);
+        const displayName = item.institutionName || itemAccounts[0]?.officialName ||
+          itemAccounts[0]?.name || "Plaid institution";
+        const busy = syncing === item.itemId || disconnecting === item.itemId;
+        return (
+          <article className="connection" key={item.itemId}>
+            <header className="connection__head">
+              <div>
+                <p className="connection__name">{displayName}</p>
+                <p className="connection__meta num">
+                  Item {item.itemId.slice(0, 8)}… · {item.accounts} account{item.accounts === 1 ? "" : "s"}
+                </p>
+              </div>
+              <span className="connection__state">Connected</span>
+            </header>
+
+            <dl className="connection__facts">
+              <div>
+                <dt>Last synced</dt>
+                <dd>
+                  {item.lastSyncedAt
+                    ? `${dayMonth(item.lastSyncedAt)} at ${timeOfDay(item.lastSyncedAt)}`
+                    : "Not synced yet"}
+                </dd>
+              </div>
+              {item.institutionId && (
+                <div>
+                  <dt>Institution ID</dt>
+                  <dd className="num">{item.institutionId}</dd>
+                </div>
+              )}
+            </dl>
+
+            <ul className="connection__accounts">
+              {itemAccounts.map((account) => {
+                const credit = `${account.type ?? ""} ${account.subtype ?? ""}`
+                  .toLowerCase().includes("credit");
+                const state = account.linkedCard ? "linked" : credit ? "unmatched" : "ineligible";
+                return (
+                  <li className="connection__account" data-state={state} key={account.id}>
+                    <div>
+                      <p className="connection__account-name">
+                        {account.officialName || account.name || "Plaid account"}
+                      </p>
+                      <p className="connection__account-meta">
+                        {account.subtype || account.type || "account"}
+                        {account.mask ? ` · ••${account.mask}` : ""}
+                      </p>
+                    </div>
+                    <span className="connection__account-state">
+                      {account.linkedCard
+                        ? `Linked to ${account.linkedCard}`
+                        : credit
+                          ? "Needs a wallet card"
+                          : "Not a credit card"}
+                    </span>
+                  </li>
+                );
+              })}
+              {itemAccounts.length === 0 && (
+                <li className="connection__account connection__account--empty">
+                  No accounts were returned for this Item.
+                </li>
+              )}
+            </ul>
+
+            <div className="connection__actions">
+              <button
+                type="button"
+                className="btn btn--small"
+                disabled={busy}
+                onClick={() => onSync(item)}
+              >
+                {syncing === item.itemId ? "Syncing…" : "Sync now"}
+              </button>
+              <button
+                type="button"
+                className="btn btn--small btn--quiet connection__disconnect"
+                disabled={busy}
+                onClick={() => onDisconnect(item)}
+              >
+                {disconnecting === item.itemId ? "Disconnecting…" : "Disconnect"}
+              </button>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function Wallet({
   wallet,
   rechecking,
   removing,
+  accounts,
+  linking,
   onRecheck,
+  onLinkAccount,
   onManual,
   onRemove,
 }: {
   wallet: CardDetail[];
   rechecking: string | null;
   removing: boolean;
-  onRecheck: (last4: string) => void;
+  accounts: PlaidAccount[];
+  linking: string | null;
+  onRecheck: (card: CardDetail) => void;
+  onLinkAccount: (card: CardDetail, accountId: string) => void;
   onManual: (card: CardDetail) => void;
   onRemove: (card: CardDetail) => void;
 }) {
@@ -88,6 +255,29 @@ function Wallet({
 
           {card.parseNote && <p className="wcard__note">{card.parseNote}</p>}
 
+          {accounts.length > 0 && (
+            <label className="field" style={{ marginTop: "1rem", maxWidth: "24rem" }}>
+              <span className="field__label">Transactions paid with</span>
+              <select
+                className="field__input"
+                value={card.accountId ?? ""}
+                disabled={linking === (card.cardId ?? card.walletId)}
+                onChange={(event) => onLinkAccount(card, event.target.value)}
+              >
+                <option value="">Choose a Plaid credit account</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name || account.officialName || "Credit account"}
+                    {account.mask ? ` ••${account.mask}` : ""}
+                    {account.linkedCard && account.linkedCard !== card.name
+                      ? ` — linked to ${account.linkedCard}`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           {card.unresolved && card.unresolved.length > 0 && (
             <details className="unresolved">
               <summary className="unresolved__toggle">
@@ -126,10 +316,10 @@ function Wallet({
             <button
               type="button"
               className="btn btn--small btn--quiet"
-              disabled={rechecking === card.last4}
-              onClick={() => onRecheck(card.last4)}
+              disabled={rechecking === (card.cardId ?? card.walletId ?? card.last4)}
+              onClick={() => onRecheck(card)}
             >
-              {rechecking === card.last4 ? "Rechecking…" : "Recheck now"}
+              {rechecking === (card.cardId ?? card.walletId ?? card.last4) ? "Rechecking…" : "Recheck now"}
             </button>
           )}
 
@@ -273,14 +463,54 @@ export function CardsView({
   wallet: CardDetail[];
   catalog: CatalogCard[];
 }) {
-  const [tab, setTab] = useState<"wallet" | "catalog">("wallet");
+  const [tab, setTab] = useState<"wallet" | "catalog" | "connections">("wallet");
   const [wallet, setWallet] = useState(initialWallet);
   const [adding, setAdding] = useState(false);
   const [manualFor, setManualFor] = useState<CardDetail | null>(null);
   const [rechecking, setRechecking] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<PlaidAccount[]>([]);
+  const [plaidItems, setPlaidItems] = useState<PlaidItem[]>([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(true);
+  const [syncingItem, setSyncingItem] = useState<string | null>(null);
+  const [disconnectingItem, setDisconnectingItem] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<string | null>(null);
+  const [linkingId, setLinkingId] = useState<string | null>(null);
   const router = useRouter();
+
+  const loadConnections = useCallback(async () => {
+    const [nextItems, nextAccounts] = await Promise.all([
+      api<PlaidItem[]>("/api/v1/plaid/items"),
+      api<PlaidAccount[]>("/api/v1/plaid/accounts"),
+    ]);
+    setPlaidItems(nextItems);
+    setAccounts(nextAccounts);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      api<PlaidItem[]>("/api/v1/plaid/items"),
+      api<PlaidAccount[]>("/api/v1/plaid/accounts"),
+    ])
+      .then(([nextItems, nextAccounts]) => {
+        if (!active) return;
+        setPlaidItems(nextItems);
+        setAccounts(nextAccounts);
+      })
+      .catch(() => {
+        if (active) setRequestError("Unable to load Plaid connections.");
+      })
+      .finally(() => {
+        if (active) setConnectionsLoading(false);
+      })
+    return () => { active = false; };
+  }, [loadConnections]);
+
+  const creditAccounts = useMemo(() => accounts.filter((account) =>
+    `${account.type ?? ""} ${account.subtype ?? ""}`.toLowerCase().includes("credit"),
+  ), [accounts]);
 
   const visibleCatalog = useMemo(() => {
     const heldNames = new Set(wallet.map((card) => card.name.toLowerCase()));
@@ -322,24 +552,23 @@ export function CardsView({
     setTab("wallet");
   }
 
-  function recheck(last4: string) {
-    setRechecking(last4);
-    window.setTimeout(() => {
-      const today = new Date().toISOString().slice(0, 10);
-      setWallet((list) =>
-        list.map((c) =>
-          c.last4 === last4
-            ? {
-                ...c,
-                parseStatus: "parsed",
-                parseNote: undefined,
-                source: { ...c.source, retrievedAt: today },
-              }
-            : c,
-        ),
+  async function recheck(card: CardDetail) {
+    const cardId = card.cardId ?? card.walletId ?? card.id;
+    if (!cardId) return;
+    setRequestError(null);
+    setRechecking(cardId);
+    try {
+      const response = await api<{ card: CardDetail; snapshot: Snapshot }>(
+        `/api/v1/cards/${encodeURIComponent(cardId)}/recheck`,
+        { method: "POST" },
       );
+      setWallet(response.snapshot.wallet);
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to recheck that card.");
+    } finally {
       setRechecking(null);
-    }, 1_200);
+    }
   }
 
   async function removeCard(card: CardDetail) {
@@ -370,6 +599,88 @@ export function CardsView({
     }
   }
 
+  async function linkAccount(card: CardDetail, accountId: string) {
+    const cardId = card.cardId ?? card.walletId ?? card.id;
+    if (!cardId || !accountId) return;
+    setRequestError(null);
+    setLinkingId(cardId);
+    try {
+      const response = await api<{ card: CardDetail; snapshot: Snapshot }>(
+        `/api/v1/cards/${encodeURIComponent(cardId)}/link-account`,
+        { method: "POST", body: JSON.stringify({ accountId }) },
+      );
+      setWallet(response.snapshot.wallet);
+      setAccounts((current) => current.map((account) => ({
+        ...account,
+        linkedCard: account.id === accountId ? card.name :
+          account.linkedCard === card.name ? null : account.linkedCard,
+      })));
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to link that account.");
+    } finally {
+      setLinkingId(null);
+    }
+  }
+
+  async function syncItem(item: PlaidItem) {
+    setRequestError(null);
+    setConnectionStatus(null);
+    setSyncingItem(item.itemId);
+    try {
+      const response = await api<{
+        added: number;
+        modified: number;
+        removed: number;
+        snapshot: Snapshot;
+      }>("/api/v1/plaid/sync", {
+        method: "POST",
+        body: JSON.stringify({ userId, itemId: item.itemId }),
+      });
+      setWallet(response.snapshot.wallet);
+      await loadConnections();
+      setConnectionStatus(
+        `Sync complete: ${response.added} added, ${response.modified} updated, ${response.removed} removed.`,
+      );
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to sync that Plaid connection.");
+    } finally {
+      setSyncingItem(null);
+    }
+  }
+
+  async function disconnectItem(item: PlaidItem) {
+    const itemAccounts = accounts.filter((account) => account.itemId === item.itemId);
+    const linkedCards = itemAccounts
+      .map((account) => account.linkedCard)
+      .filter((name): name is string => Boolean(name));
+    const consequence = linkedCards.length
+      ? ` This will unlink ${linkedCards.join(", ")} and remove this institution's transactions.`
+      : " This will remove this institution's imported transactions.";
+    if (!window.confirm(`Disconnect ${item.institutionName || "this Plaid institution"}?${consequence}`)) return;
+
+    setRequestError(null);
+    setConnectionStatus(null);
+    setDisconnectingItem(item.itemId);
+    try {
+      const response = await api<{ transactionsRemoved: number; snapshot: Snapshot }>(
+        `/api/v1/plaid/items/${encodeURIComponent(item.itemId)}`,
+        { method: "DELETE" },
+      );
+      setWallet(response.snapshot.wallet);
+      await loadConnections();
+      setConnectionStatus(
+        `Disconnected successfully. ${response.transactionsRemoved} transaction${response.transactionsRemoved === 1 ? "" : "s"} removed.`,
+      );
+      router.refresh();
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to disconnect that Plaid connection.");
+    } finally {
+      setDisconnectingItem(null);
+    }
+  }
+
   const showFlow = adding || manualFor !== null;
 
   return (
@@ -395,8 +706,18 @@ export function CardsView({
           All cards
           <span className="tabs__count">{visibleCatalog.length}</span>
         </button>
+        <button
+          type="button"
+          role="tab"
+          className="tabs__tab"
+          aria-selected={tab === "connections"}
+          onClick={() => setTab("connections")}
+        >
+          Connections
+          <span className="tabs__count">{plaidItems.length}</span>
+        </button>
 
-        {!showFlow && (
+        {!showFlow && tab !== "connections" && (
           <button type="button" className="tabs__action" onClick={openAdd}>
             + Add a card
           </button>
@@ -428,15 +749,29 @@ export function CardsView({
           wallet={wallet}
           rechecking={rechecking}
           removing={removingId !== null}
+          accounts={creditAccounts}
+          linking={linkingId}
           onRecheck={recheck}
+          onLinkAccount={linkAccount}
           onManual={(card) => {
             setAdding(false);
             setManualFor(card);
           }}
           onRemove={removeCard}
         />
-      ) : (
+      ) : tab === "catalog" ? (
         <Catalog catalog={visibleCatalog} onAddRequest={openAdd} />
+      ) : (
+        <PlaidConnections
+          items={plaidItems}
+          accounts={accounts}
+          loading={connectionsLoading}
+          syncing={syncingItem}
+          disconnecting={disconnectingItem}
+          status={connectionStatus}
+          onSync={syncItem}
+          onDisconnect={disconnectItem}
+        />
       )}
     </>
   );
