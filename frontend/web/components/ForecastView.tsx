@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import type {
   CardCap,
   Forecast,
-  PlannedItem,
+  PlannedItemDraft,
+  Snapshot,
   TimelineEntry,
   TimelineKind,
 } from "@/lib/types";
@@ -39,6 +40,7 @@ export function ForecastView({
   cards: CardCap[];
   today: string;
 }) {
+  const [currentForecast, setCurrentForecast] = useState(forecast);
   const [timeline, setTimeline] = useState<TimelineEntry[]>(forecast.timeline);
   const [extraSpend, setExtraSpend] = useState(0);
   const [adding, setAdding] = useState(false);
@@ -47,14 +49,17 @@ export function ForecastView({
   const [requestError, setRequestError] = useState<string | null>(null);
   const router = useRouter();
 
-  const projected = forecast.projectedSpend + extraSpend;
-  const low = projected - forecast.confidence;
-  const high = projected + forecast.confidence;
+  const projected = currentForecast.projectedSpend + extraSpend;
+  const low = projected - currentForecast.confidence;
+  const high = projected + currentForecast.confidence;
   const actionable = timeline.filter((e) => e.action).length;
 
-  async function addItem(item: PlannedItem) {
+  async function addItem(item: PlannedItemDraft) {
     setSaving(true);
     setRequestError(null);
+    const previousTimeline = timeline;
+    const previousExtraSpend = extraSpend;
+    const previousChange = change;
     const entries: TimelineEntry[] = [
       {
         date: item.startDate,
@@ -90,7 +95,7 @@ export function ForecastView({
     }
 
     const days = daysBetween(today, item.startDate);
-    const counted = days >= 0 && days <= forecast.horizonDays;
+    const counted = days >= 0 && days <= currentForecast.horizonDays;
 
     setTimeline((list) =>
       [...list, ...entries].sort((a, b) => a.date.localeCompare(b.date)),
@@ -107,9 +112,18 @@ export function ForecastView({
         : null,
     });
     try {
-      await api("/api/v1/planned", { method: "POST", body: JSON.stringify(item) });
+      const snapshot = await api<Snapshot>("/api/v1/planned", {
+        method: "POST",
+        body: JSON.stringify(item),
+      });
+      setCurrentForecast(snapshot.forecast);
+      setTimeline(snapshot.forecast.timeline);
+      setExtraSpend(0);
       router.refresh();
     } catch (error) {
+      setTimeline(previousTimeline);
+      setExtraSpend(previousExtraSpend);
+      setChange(previousChange);
       setRequestError(error instanceof Error ? error.message : "Unable to save planned spending.");
     } finally {
       setSaving(false);
@@ -120,7 +134,7 @@ export function ForecastView({
     <>
       <section className="shell hero hero--sub">
         <p className="hero__eyebrow">
-          What&rsquo;s coming · next {forecast.horizonDays} days
+          What&rsquo;s coming · next {currentForecast.horizonDays} days
         </p>
 
         <p className="hero__figure hero__figure--sub num">
@@ -134,7 +148,7 @@ export function ForecastView({
 
         <p className="hero__sub">
           Somewhere between {moneyWhole(low)} and {moneyWhole(high)}.{" "}
-          {forecast.basis}
+          {currentForecast.basis}
         </p>
       </section>
 
@@ -147,6 +161,7 @@ export function ForecastView({
                 type="button"
                 className="section__action"
                 onClick={() => setAdding(true)}
+                disabled={saving}
               >
                 + Add something planned
               </button>

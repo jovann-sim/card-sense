@@ -80,9 +80,10 @@ rules each offer the action that resolves them.
 
 **Dashboard and all pages.** Every component reads one object, typed as
 `Snapshot` in [web/lib/types.ts](web/lib/types.ts). Server components call
-[web/lib/api.ts](web/lib/api.ts), which fetches `/api/v1/snapshot` with no
-cache. In development it falls back to [web/lib/mock.ts](web/lib/mock.ts) if
-the API is unavailable; production fails visibly instead of showing fake data.
+[web/lib/api.ts](web/lib/api.ts), which caches `/api/v1/snapshot` for ten
+seconds and invalidates that cache immediately after successful mutations. In
+development it falls back to [web/lib/mock.ts](web/lib/mock.ts) if the API is
+unavailable; production fails visibly instead of showing fake data.
 
 **Extension.** The seam is `getVerdict()` in
 [extension/popup.js](extension/popup.js). It returns a fixed object today;

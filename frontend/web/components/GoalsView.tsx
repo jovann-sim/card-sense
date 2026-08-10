@@ -2,7 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Goal, PlannedItem, RewardTrack, TrackValuation } from "@/lib/types";
+import type {
+  Goal,
+  PlannedItem,
+  PlannedItemDraft,
+  RewardTrack,
+  Snapshot,
+  TrackValuation,
+} from "@/lib/types";
 import { count, dayMonth, money } from "@/lib/format";
 import { daysBetween, projectArrival, weeksBetween } from "@/lib/goal";
 import { PlannedForm } from "./PlannedForm";
@@ -88,15 +95,29 @@ export function GoalsView({
     }
   }
 
-  async function addPlan(item: PlannedItem) {
+  async function addPlan(item: PlannedItemDraft) {
     setSaving(true);
     setRequestError(null);
+    const previous = planned;
+    const optimistic: PlannedItem = {
+      ...item,
+      id: `pending-${Date.now()}`,
+    };
+    setPlanned((list) =>
+      [...list, optimistic].sort((a, b) => a.startDate.localeCompare(b.startDate)),
+    );
+    setAdding(false);
     try {
-      await api("/api/v1/planned", { method: "POST", body: JSON.stringify(item) });
-      setPlanned((list) => [...list, item].sort((a, b) => a.startDate.localeCompare(b.startDate)));
-      setAdding(false);
+      const snapshot = await api<Snapshot>("/api/v1/planned", {
+        method: "POST",
+        body: JSON.stringify(item),
+      });
+      setPlanned(
+        [...snapshot.planned].sort((a, b) => a.startDate.localeCompare(b.startDate)),
+      );
       router.refresh();
     } catch (error) {
+      setPlanned(previous);
       setRequestError(error instanceof Error ? error.message : "Unable to save planned spending.");
     } finally {
       setSaving(false);
@@ -106,11 +127,18 @@ export function GoalsView({
   async function removePlan(id: string) {
     setSaving(true);
     setRequestError(null);
+    const previous = planned;
+    setPlanned((list) => list.filter((item) => item.id !== id));
     try {
-      await api(`/api/v1/planned/${id}`, { method: "DELETE" });
-      setPlanned((list) => list.filter((item) => item.id !== id));
+      const snapshot = await api<Snapshot>(`/api/v1/planned/${id}`, {
+        method: "DELETE",
+      });
+      setPlanned(
+        [...snapshot.planned].sort((a, b) => a.startDate.localeCompare(b.startDate)),
+      );
       router.refresh();
     } catch (error) {
+      setPlanned(previous);
       setRequestError(error instanceof Error ? error.message : "Unable to remove planned spending.");
     } finally {
       setSaving(false);
@@ -298,6 +326,7 @@ export function GoalsView({
                 type="button"
                 className="plan__remove"
                 onClick={() => removePlan(item.id)}
+                disabled={saving}
               >
                 Remove
               </button>
@@ -314,7 +343,12 @@ export function GoalsView({
             onAdd={addPlan}
           />
         ) : (
-          <button type="button" className="btn" onClick={() => setAdding(true)}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setAdding(true)}
+            disabled={saving}
+          >
             Add something planned
           </button>
         )}

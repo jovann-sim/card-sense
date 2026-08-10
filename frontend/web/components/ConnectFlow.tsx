@@ -47,6 +47,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
   const [stage, setStage] = useState(-1);
   const [plaidReady, setPlaidReady] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [connectionPhase, setConnectionPhase] = useState<"opening" | "syncing">("opening");
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const linkRef = useRef<ReturnType<NonNullable<Window["Plaid"]>["create"]> | null>(null);
@@ -60,6 +61,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
 
   const completePlaidConnection = useCallback(async (publicToken: string) => {
     syncingRef.current = true;
+    setConnectionPhase("syncing");
     try {
       await api("/api/v1/plaid/exchange-token", {
         method: "POST", body: JSON.stringify({ publicToken, userId }),
@@ -79,6 +81,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
   async function connectPlaid() {
     if (connecting || !plaidReady || !window.Plaid) return;
     setConnectionError(null);
+    setConnectionPhase("opening");
     setConnecting(true);
     try {
       const result = await api<{ link_token: string }>("/api/v1/plaid/link-token", {
@@ -150,7 +153,16 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
   if (!open) {
     return (
       <>
-        <Script id="plaid-link" src="https://cdn.plaid.com/link/v2/stable/link-initialize.js" strategy="afterInteractive" onLoad={() => setPlaidReady(true)} />
+        <Script
+          id="plaid-link"
+          src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"
+          strategy="afterInteractive"
+          onReady={() => setPlaidReady(Boolean(window.Plaid))}
+          onError={() => {
+            setPlaidReady(false);
+            setConnectionError("Plaid Link could not be loaded. Check your network or content blocker and try again.");
+          }}
+        />
         <button type="button" className="replay" onClick={() => setOpen(true)}>
           Replay connect
         </button>
@@ -159,7 +171,18 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
   }
 
   return (
-    <div className="scrim" onClick={close}>
+    <>
+      <Script
+        id="plaid-link"
+        src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"
+        strategy="afterInteractive"
+        onReady={() => setPlaidReady(Boolean(window.Plaid))}
+        onError={() => {
+          setPlaidReady(false);
+          setConnectionError("Plaid Link could not be loaded. Check your network or content blocker and try again.");
+        }}
+      />
+      <div className="scrim" onClick={close}>
       <div
         className="dialog"
         role="dialog"
@@ -201,7 +224,15 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
                     onClick={connectPlaid}
                     disabled={!plaidReady || connecting}
                   >
-                    {connecting ? "Connecting…" : plaidReady ? "Connect with Plaid" : "Loading Plaid…"}
+                    {connecting
+                      ? connectionPhase === "syncing"
+                        ? "Syncing transactions…"
+                        : "Opening Plaid…"
+                      : plaidReady
+                        ? "Connect with Plaid"
+                        : connectionError
+                          ? "Plaid unavailable"
+                          : "Loading Plaid…"}
                   </button>
                   <p className="dialog__fine">
                     Sandbox credentials — no real account is touched.
@@ -358,6 +389,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
           ✕
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
