@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..config import settings
 from .runtime import ModelUnavailable
+from ..mcc import backfill
 from ..valuations import BASE_CURRENCY, DIVERGENCE_TOLERANCE, divergence, unit_value
 from .schema import (
     EXTRACTION_PROMPT,
@@ -17,6 +18,7 @@ from .schema import (
     spend_cap,
     value_per_dollar,
 )
+from .consolidate import consolidate
 from .terms import FetchError, TermsDocument, document_from_text, fetch_terms
 
 log = logging.getLogger(__name__)
@@ -127,15 +129,29 @@ class CardIntelligenceAgent:
 
     def parse_document(self, document: TermsDocument, card: dict, previous: dict | None = None) -> dict:
         """Extract from a document already in hand — a fetch, a paste, or an upload."""
-        try:
-            extraction = self.runtime.structured(EXTRACTION_PROMPT, ExtractionResult, document=document)
-        except ModelUnavailable as exc:
-            log.warning("Card intelligence model failure (%s): %s", exc.reason, exc.detail)
-            return self._failure(exc.reason, previous, locator=document.locator)
+        passes, failure = [], None
+        for _ in range(max(1, settings.extraction_passes)):
+            try:
+                passes.append(self.runtime.structured(EXTRACTION_PROMPT, ExtractionResult, document=document))
+            except ModelUnavailable as exc:
+                log.warning("Card intelligence model failure (%s): %s", exc.reason, exc.detail)
+                failure = exc
+                break
 
-        if not extraction.rules:
+        if not passes:
+            return self._failure(failure.reason if failure else "model_unavailable",
+                                 previous, locator=document.locator)
+
+        extraction = consolidate(passes)
+
+        # A card can be entirely benefits — a fixed quarterly rebate earns no
+        # percentage, so demanding a rate would exclude a card worth real money.
+        if not extraction.rules and not extraction.benefits:
             return self._failure("no_rules_found", previous, locator=document.locator, terminal=True)
-        if extraction.confidence < settings.extraction_min_confidence:
+        # The confidence gate guards against asserting a rate we misread. A card
+        # that states no rates but real benefits has nothing to misread, so the
+        # gate would exclude it for the wrong reason.
+        if extraction.rules and extraction.confidence < settings.extraction_min_confidence:
             return self._failure("low_confidence", previous, locator=document.locator, terminal=True)
 
         return self._success(extraction, document, card)
@@ -179,6 +195,11 @@ class CardIntelligenceAgent:
                 data["rateValue"] = chosen["rateValue"]
                 data["rateUnit"] = chosen["rateUnit"]
                 data["rewardCurrency"] = chosen.get("rewardCurrency") or programme
+                # "S$60 cash back or 6,000 points a month" — the cap that
+                # applies is the one quoted in the currency being earned.
+                if chosen.get("cap") is not None:
+                    data["cap"] = chosen["cap"]
+                    data["capType"] = chosen.get("capType") or data.get("capType")
             rule_programme = data.get("rewardCurrency") or programme
 
             priced = spend_cap(data)
@@ -223,6 +244,9 @@ class CardIntelligenceAgent:
                 "rewardUnitValueSource": unit_source,
                 "currency": currency,
             })
+        # The model omits codes inconsistently, and a rule without them falls
+        # back to label matching. Fill the gaps from the curated table.
+        rules, inferred = backfill(rules)
         rules.sort(key=lambda item: item["valuePerDollar"], reverse=True)
         rules = with_rule_ids(rules)
 
@@ -243,6 +267,9 @@ class CardIntelligenceAgent:
             "nextRecheckAt": str(today + timedelta(days=7)),
             "documentSummary": extraction.documentSummary,
             "currency": currency,
+            # Value that is not earned per dollar. An Amex Platinum is mostly
+            # this, and leaving it out understates the card by hundreds a year.
+            "benefits": [b.model_dump(exclude_none=True) for b in extraction.benefits],
             # Structures the model saw but could not express, plus anything
             # that did not add up. Surfaced rather than dropped, because a
             # known gap beats a silent wrong number.
