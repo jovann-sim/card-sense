@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Extraction quality gate. Below this the card is excluded rather than guessed.
     extraction_min_confidence: float = 0.35
 
+    # Reading a document twice and merging the passes. Misses between runs are
+    # uncorrelated, so a second pass recovers most of them; card intelligence
+    # runs weekly per card, so the extra call is cheap. Set to 1 to disable.
+    extraction_passes: int = 2
+
     # Demo-mode persistence, so extracted cards survive a restart without Firestore.
     persist_local_store: bool = True
     local_store_path: str = ".localstore.json"

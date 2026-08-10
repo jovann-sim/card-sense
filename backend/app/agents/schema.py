@@ -20,6 +20,7 @@ ConditionKind = Literal[
     "new_customer",
     "promotional_period",
     "spend_elsewhere",
+    "transaction_count",
     "other",
 ]
 
@@ -36,6 +37,8 @@ class RewardOption(BaseModel):
     rewardCurrency: str | None = Field(default=None, description="Programme name, e.g. yuu Points, UNI$, KrisFlyer miles")
     rateValue: float = Field(ge=0, description="4 for 4%; 1.4 for 1.4 miles per dollar; 10 for 10X points")
     rateUnit: RateUnit
+    cap: float | None = Field(default=None, description="Cap expressed in THIS currency, when the document gives a different figure per currency")
+    capType: CapType | None = None
 
 
 class Condition(BaseModel):
@@ -44,6 +47,7 @@ class Condition(BaseModel):
     kind: ConditionKind
     description: str = Field(description="One clause, quoted plainly from the document")
     amount: float | None = Field(default=None, description="Threshold amount where the condition states one")
+    count: int | None = Field(default=None, description="Threshold number of transactions, for transaction_count")
     cycleLabel: Cycle = "no cap"
 
 
@@ -71,6 +75,7 @@ class ExtractedRule(BaseModel):
     requiresSelection: bool = Field(default=False, description="True when the holder must nominate this category themselves")
     selectableCategories: list[str] = Field(default_factory=list, description="The menu they choose from, if the document lists it")
     stacksWithBase: bool = Field(default=False, description="True when this rate is earned on top of the base rate rather than instead of it")
+    capGroup: str | None = Field(default=None, description="Set to the same label on every rule that shares one combined cap")
 
     notes: str | None = Field(default=None, description="One short caveat that does not fit the fields above")
 
@@ -83,9 +88,34 @@ class ExtractedCharacteristics(BaseModel):
     rewardCurrency: str | None = Field(default=None, description="Primary points or miles programme, if any")
     annualFee: float | None = Field(default=None, ge=0)
     feeWaiverSpend: float | None = Field(default=None, ge=0)
+    feeWaiverYears: float | None = Field(default=None, ge=0, description="Years the fee is waived for regardless of spend")
     minIncome: float | None = Field(default=None, ge=0)
     foreignTxFeePct: float | None = Field(default=None, ge=0)
     rewardExpiryMonths: float | None = Field(default=None, ge=0)
+    multiplierTiers: list["MultiplierTier"] = Field(default_factory=list, description="Programme tiers that multiply every reward earned, e.g. relationship status")
+
+
+class MultiplierTier(BaseModel):
+    label: str = Field(description="Tier name, e.g. Preferred Rewards Platinum Honors")
+    multiplierPct: float = Field(description="25 for a 25% bonus on all rewards earned")
+    requirement: str | None = Field(default=None, description="What qualifies the holder for this tier")
+
+
+class Benefit(BaseModel):
+    """Value that is not earned per dollar — credits, waivers, access.
+
+    An Amex Platinum is mostly this. Recording it as a reward rate would be
+    wrong, and dropping it would understate the card by hundreds a year.
+    """
+
+    label: str
+    kind: Literal["statement_credit", "fee_waiver", "lounge_access", "insurance", "voucher", "other"]
+    amount: float | None = Field(default=None, description="Maximum value of the benefit")
+    cycleLabel: Cycle = "per year"
+    # Structured for the same reason a rule's are: a rebate needing S$500 of
+    # spend and five transactions a month is a condition the optimiser can
+    # check, not a sentence for a human to re-read.
+    conditions: list[Condition] = Field(default_factory=list, description="What must happen to receive it")
 
 
 class ExtractionResult(BaseModel):
@@ -93,6 +123,7 @@ class ExtractionResult(BaseModel):
     characteristics: ExtractedCharacteristics = Field(default_factory=ExtractedCharacteristics)
     confidence: float = Field(default=0.0, ge=0, le=1)
     documentSummary: str | None = None
+    benefits: list[Benefit] = Field(default_factory=list, description="Credits, waivers and access that are not per-dollar earn rates")
     unresolved: list[str] = Field(default_factory=list, description="Structures present in the document that could not be expressed in these fields")
 
 
@@ -185,11 +216,23 @@ SCOPE — this is what stops a rate being overstated
 - exclusions: spending the document explicitly excludes from earning.
 
 CONDITIONS — record every qualifier as its own entry
-- minimum_spend, enrolment, category_selection, banking_relationship (holding a linked savings or salary account), new_customer, promotional_period, spend_elsewhere.
-- requiresSelection is true when the holder must nominate the bonus category themselves, as on cards where you pick your own bonus categories. List the menu in selectableCategories if the document gives it.
+- minimum_spend: a dollar threshold. Put the figure in `amount`.
+- transaction_count: a required NUMBER of transactions, e.g. "at least 5 card transactions each month". Put the number in `count`. This is separate from minimum_spend and a card can require both.
+- banking_relationship: holding or maintaining another product with the issuer — a savings account, a salary credit, a balance tier. Record this even when it only changes the rate rather than gating it.
+- spend_elsewhere: the rate depends on spending on a DIFFERENT product or account, not on this card.
+- enrolment: the holder must activate or register, including quarterly re-activation.
+- category_selection, new_customer, promotional_period, other.
+- requiresSelection is true when the holder must nominate the bonus category themselves. List the menu in selectableCategories if the document gives it.
 
 CAPS
 - cap is the numeric limit and capType says what it limits. "5% on up to $600 spend monthly" -> cap 600, capType spend. "Up to $60 cash back monthly" -> cap 60, capType reward.
+- When the document gives a DIFFERENT cap per reward currency — "S$60 cash back or 6,000 points a month" — put each figure on its own entry in rewards, not just the first one.
+- capGroup: when one cap is shared across several categories, set the same capGroup label on every rule it covers.
+
+BEYOND EARN RATES
+- benefits: statement credits, fee waivers, lounge access, vouchers and insurance. An Amex Platinum is mostly this, and recording those as earn rates would be wrong while dropping them understates the card badly.
+- A FIXED REBATE tied to a spend tier is a benefit, not a rate. "Spend at least S$500 each month and receive S$50 per quarter" earns no percentage, so record it as a statement_credit benefit with amount 50, cycleLabel "per quarter", and the spend and transaction-count requirements as structured entries in its `conditions`, exactly as for a rule. Record one benefit per tier. A card can have benefits and no rules at all — that is a valid extraction, not an empty one.
+- multiplierTiers on characteristics: programme tiers that multiply ALL rewards earned, such as a relationship status giving 25%, 50% or 75% more. This is not a rule condition; it applies across the card.
 
 RULES OF ENGAGEMENT
 - Extract only what the document states. Never infer a rate, cap or condition from general knowledge of this card. The one exception is supplying standard MCC codes for a category the document describes in words.
