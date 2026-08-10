@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 
-# Everything is priced in Singapore dollars unless a card's own terms are
-# denominated elsewhere, in which case the reward stays in that currency and is
-# labelled rather than converted — a live FX rate is not something this system
-# should be silently inventing.
-BASE_CURRENCY = "SGD"
+# Everything is priced in US dollars unless a card's own terms are denominated
+# elsewhere, in which case the reward stays in that currency and is labelled
+# rather than converted — a live FX rate is not something this system should be
+# silently inventing.
+BASE_CURRENCY = "USD"
 
 
 # Value of ONE unit of each reward currency, in SGD.
@@ -17,45 +17,43 @@ BASE_CURRENCY = "SGD"
 # the number it produced. Confirm them against real redemptions before the
 # numbers are presented as advice.
 REWARD_UNIT_VALUES: dict[str, tuple[float, str]] = {
-    # Airline currencies
-    "krisflyer miles": (0.019, "Placeholder: ~1.9 SG cents, economy saver redemption. Confirm."),
-    "asia miles": (0.018, "Placeholder: ~1.8 SG cents. Confirm."),
-    "avios": (0.017, "Placeholder: ~1.7 SG cents. Confirm."),
-    "enrich miles": (0.014, "Placeholder: ~1.4 SG cents. Confirm."),
-    # Bank currencies that transfer out to airlines
-    "membership rewards": (0.0095, "Placeholder: ~2 MR points per mile, so roughly half a mile's value. Confirm."),
-    "thankyou points": (0.008, "Placeholder. Confirm against Citi transfer ratios."),
-    "dbs points": (0.019, "Placeholder: 1 DBS point transfers to ~2 miles on most cards. Confirm."),
-    # The divergence check caught this: a card quoting both "10 UNI$ per S$5"
-    # and "4 miles per S$1" priced 44% apart, which can only mean the UNI$
-    # figure was wrong. 1 UNI$ = 2 miles, so it must be twice a mile.
-    "uni$": (0.038, "Placeholder: 1 UNI$ transfers to 2 miles at ~1.9 SG cents each. Confirm."),
-    "reward points": (0.0076, "Placeholder: ~2.5 HSBC points per mile. Confirm."),
-    "ocbc$": (0.008, "Placeholder. Confirm against OCBC redemption tables."),
-    "yuu points": (0.01, "Placeholder: 100 yuu Points redeem for about S$1 at partners. Confirm."),
-    "linkpoints": (0.01, "Placeholder: ~100 LinkPoints per S$1. Confirm."),
+    # US transferable bank currencies. These are the ones that matter, because
+    # every major US card earns into one of them.
+    "membership rewards": (0.020, "Placeholder: ~2.0 cents via airline transfer partners. Confirm."),
+    "ultimate rewards": (0.0205, "Placeholder: ~2.05 cents via transfer partners. Confirm."),
+    "thankyou points": (0.018, "Placeholder: ~1.8 cents via transfer partners. Confirm."),
+    "venture miles": (0.0185, "Placeholder: Capital One miles, ~1.85 cents via transfers. Confirm."),
+    "capital one miles": (0.0185, "Placeholder: ~1.85 cents via transfer partners. Confirm."),
+    "bilt points": (0.0205, "Placeholder: ~2.05 cents via transfer partners. Confirm."),
+
+    # US airline and hotel programmes
+    "skymiles": (0.012, "Placeholder: Delta, ~1.2 cents. Confirm."),
+    "aadvantage": (0.014, "Placeholder: American, ~1.4 cents. Confirm."),
+    "mileageplus": (0.013, "Placeholder: United, ~1.3 cents. Confirm."),
+    "rapid rewards": (0.014, "Placeholder: Southwest, ~1.4 cents and revenue-based. Confirm."),
+    "alaska mileage plan": (0.015, "Placeholder: ~1.5 cents. Confirm."),
+    "jetblue trueblue": (0.013, "Placeholder: ~1.3 cents. Confirm."),
+    "marriott bonvoy": (0.0075, "Placeholder: ~0.75 cents. Confirm."),
+    "hilton honors": (0.005, "Placeholder: ~0.5 cents. Confirm."),
+    "world of hyatt": (0.017, "Placeholder: ~1.7 cents, the strongest hotel currency. Confirm."),
+    "ihg one rewards": (0.005, "Placeholder: ~0.5 cents. Confirm."),
+
+    # Cash-equivalent programmes. Redeemable at face value, so no discount.
+    "reward dollars": (1.0, "Amex Reward Dollars redeem as a statement credit at face value."),
+    "cash rewards": (1.0, "Redeems as cash or statement credit at face value."),
+    "discover cashback bonus": (1.0, "Redeems as cash at face value."),
+
+    # Retained for cards denominated outside the US.
+    "krisflyer miles": (0.014, "Placeholder: ~1.4 US cents. Confirm."),
+    "asia miles": (0.013, "Placeholder: ~1.3 US cents. Confirm."),
+    "avios": (0.013, "Placeholder: ~1.3 US cents. Confirm."),
 }
-
-
-# Two reward options on the same rule describe one reward paid two ways, so
-# they should price to roughly the same figure. A wide gap means either the
-# extraction misread a conversion or a programme is mispriced — both worth
-# saying out loud rather than quietly feeding into a recommendation.
-DIVERGENCE_TOLERANCE = 0.35
-
-
-def divergence(values: list[float]) -> float:
-    """How far apart the priced options are, as a fraction of the largest."""
-    priced = [v for v in values if v > 0]
-    if len(priced) < 2:
-        return 0.0
-    return (max(priced) - min(priced)) / max(priced)
 
 # Used when the document names no programme, or names one we do not price.
 DEFAULT_UNIT_VALUES: dict[str, tuple[float, str]] = {
     "cashback": (1.0, "Cash back is already denominated in dollars. No conversion applied."),
-    "miles": (0.017, "Placeholder default for an unrecognised airline programme. Confirm."),
-    "points": (0.01, "Placeholder default for an unrecognised points programme. Confirm."),
+    "miles": (0.013, "Placeholder default for an unrecognised airline programme. Confirm."),
+    "points": (0.012, "Placeholder default for an unrecognised bank points programme. Confirm."),
 }
 
 # Kept for callers that predate per-programme pricing.
