@@ -111,3 +111,51 @@ def test_summary_reports_coverage_gaps():
     assert summary["mccCoverage"] == 0.5
     assert summary["unlinkedToCard"] == 1
     assert agent.degraded(summary), "a coverage gap this large must be surfaced"
+
+
+# -- account linking --------------------------------------------------------
+
+def test_accounts_auto_link_by_mask(monkeypatch):
+    """Plaid's account mask is the last4 the user typed when adding the card."""
+    from app import main
+    from app.store import Store
+
+    test_store = Store()
+    monkeypatch.setattr(main, "store", test_store)
+    test_store.set_subdoc("demo-user", "plaid_accounts", "acc-1", {
+        "id": "acc-1", "mask": "3333", "type": "credit", "subtype": "credit card"})
+    test_store.set_subdoc("demo-user", "wallet", "visa-card", {
+        "cardId": "visa-card", "name": "Card", "last4": "3333"})
+
+    linked = main.link_accounts_to_cards("demo-user")
+    assert linked and linked[0]["accountId"] == "acc-1"
+    assert test_store.get_subdoc("demo-user", "wallet", "visa-card")["accountId"] == "acc-1"
+
+
+def test_a_depository_account_is_never_linked_to_a_card(monkeypatch):
+    """A current account sharing a mask is not the card that earned the reward."""
+    from app import main
+    from app.store import Store
+
+    test_store = Store()
+    monkeypatch.setattr(main, "store", test_store)
+    test_store.set_subdoc("demo-user", "plaid_accounts", "acc-2", {
+        "id": "acc-2", "mask": "3333", "type": "depository", "subtype": "checking"})
+    test_store.set_subdoc("demo-user", "wallet", "visa-card", {
+        "cardId": "visa-card", "name": "Card", "last4": "3333"})
+
+    assert main.link_accounts_to_cards("demo-user") == []
+
+
+def test_an_already_linked_card_is_left_alone(monkeypatch):
+    from app import main
+    from app.store import Store
+
+    test_store = Store()
+    monkeypatch.setattr(main, "store", test_store)
+    test_store.set_subdoc("demo-user", "plaid_accounts", "acc-3", {
+        "id": "acc-3", "mask": "3333", "type": "credit", "subtype": "credit card"})
+    test_store.set_subdoc("demo-user", "wallet", "visa-card", {
+        "cardId": "visa-card", "name": "Card", "last4": "3333", "accountId": "chosen-by-hand"})
+
+    assert main.link_accounts_to_cards("demo-user") == []
