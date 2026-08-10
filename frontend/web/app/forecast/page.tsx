@@ -14,6 +14,7 @@ export default async function ForecastPage() {
   return (
     <main>
       <ForecastView
+        key={snapshot.generatedAt}
         forecast={forecast}
         cards={snapshot.cards}
         today={snapshot.generatedAt}

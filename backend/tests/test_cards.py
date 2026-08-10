@@ -12,6 +12,30 @@ def test_removing_wallet_card_keeps_global_rules():
     assert store.get_global_doc("card_rules", "visa-card") is not None
 
 
+def test_card_delete_skips_advisory_model_call(monkeypatch):
+    store = Store()
+    store.set_global_doc("card_rules", "visa-card", {"rules": []})
+    store.set_subdoc(main.UID, "wallet", "visa-card", {
+        "cardId": "visa-card", "name": "Card", "last4": "1234",
+        "network": "Visa", "annualFee": 0, "track": "cashback",
+        "rules": [], "parseStatus": "parsed",
+    })
+    orchestrator = Orchestrator(store)
+
+    def unexpected_advisory(*_args, **_kwargs):
+        raise AssertionError("card deletion must not invoke Advisory")
+
+    orchestrator.advisory.run = unexpected_advisory
+    monkeypatch.setattr(main, "store", store)
+    monkeypatch.setattr(main, "orch", orchestrator)
+
+    snapshot = main.delete_card("visa-card")
+
+    assert snapshot["wallet"] == []
+    assert store.get_subdoc(main.UID, "wallet", "visa-card") is None
+    assert store.get_global_doc("card_rules", "visa-card") is not None
+
+
 def test_legacy_wallet_document_uses_its_document_id_as_card_id():
     store = Store()
     store.set_subdoc("user", "wallet", "legacy-card", {"name": "Legacy", "last4": "9876"})

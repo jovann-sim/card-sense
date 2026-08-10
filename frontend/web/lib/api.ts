@@ -3,6 +3,10 @@ import { cache } from "react";
 
 import { snapshot as mockSnapshot } from "@/lib/mock";
 import type { Snapshot } from "@/lib/types";
+import {
+  SNAPSHOT_CACHE_TAG,
+  SNAPSHOT_REVALIDATE_SECONDS,
+} from "@/lib/cache-tags";
 
 const requiredSnapshotKeys = [
   "generatedAt", "period", "totals", "agents", "recommendations", "categories",
@@ -32,8 +36,11 @@ export const getSnapshot = cache(async (): Promise<Snapshot> => {
   const timeout = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);
   try {
     const response = await fetch(`${baseUrl}/api/v1/snapshot`, {
-      cache: "no-store",
       headers: { Accept: "application/json" },
+      next: {
+        revalidate: SNAPSHOT_REVALIDATE_SECONDS,
+        tags: [SNAPSHOT_CACHE_TAG],
+      },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`CardSense API returned ${response.status}`);

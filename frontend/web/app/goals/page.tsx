@@ -27,6 +27,7 @@ export default async function GoalsPage() {
 
       <div className="shell">
         <GoalsView
+          key={snapshot.generatedAt}
           goal={snapshot.goal}
           planned={snapshot.planned}
           tracks={snapshot.tracks}

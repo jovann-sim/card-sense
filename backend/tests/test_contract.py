@@ -1,6 +1,7 @@
 from app.orchestrator import Orchestrator
 from app.store import Store
-from app.models import Snapshot
+from app.models import GoalIn, PlannedItemIn, Snapshot
+from app import main
 
 
 def test_snapshot_is_persisted_as_a_subcollection_read_model():
@@ -12,6 +13,84 @@ def test_snapshot_is_persisted_as_a_subcollection_read_model():
     assert store.get_subdoc("test-user", "forecasts", run_id)
     assert store.get_subdoc("test-user", "strategy_runs", run_id)
     assert len(store.get_subcollection("test-user", "agent_runs")) == 5
+
+
+def test_snapshot_cache_avoids_repeated_backing_store_reads(monkeypatch):
+    store = Store()
+    store.set_subdoc("test-user", "snapshots", "current", {"version": 1})
+    original_get_subdoc = store.get_subdoc
+    backing_reads = 0
+
+    def counted_get_subdoc(*args, **kwargs):
+        nonlocal backing_reads
+        backing_reads += 1
+        return original_get_subdoc(*args, **kwargs)
+
+    monkeypatch.setattr(store, "get_subdoc", counted_get_subdoc)
+
+    assert store.get_snapshot("test-user") == {"id": "current", "version": 1}
+    assert store.get_snapshot("test-user") == {"id": "current", "version": 1}
+    assert backing_reads == 1
+
+    store.set_snapshot("test-user", {"version": 2})
+    assert store.get_snapshot("test-user") == {"version": 2}
+    assert backing_reads == 1
+
+
+def test_planned_save_uses_targeted_snapshot_projection(monkeypatch):
+    store = Store()
+    orchestrator = Orchestrator(store)
+    store.set_snapshot(main.UID, orchestrator.empty_snapshot(main.UID))
+
+    def unexpected_advisory(*_args, **_kwargs):
+        raise AssertionError("planned save must not invoke Advisory")
+
+    orchestrator.advisory.run = unexpected_advisory
+    monkeypatch.setattr(main, "store", store)
+    monkeypatch.setattr(main, "orch", orchestrator)
+
+    snapshot = main.add_planned(PlannedItemIn(
+        kind="purchase",
+        label="Laptop",
+        startDate="2026-09-01",
+        amount=2000,
+        categories=["Online retail"],
+    ))
+
+    assert snapshot["planned"][0]["label"] == "Laptop"
+    assert snapshot["forecast"]["timeline"][0]["title"] == "Laptop"
+
+    removed = main.delete_planned(snapshot["planned"][0]["id"])
+    assert removed["planned"] == []
+    assert removed["forecast"]["timeline"] == []
+    assert store.get_subcollection(main.UID, "agent_runs") == []
+    assert store.get_subcollection(main.UID, "forecasts") == []
+
+
+def test_goal_save_skips_advisory_model_call(monkeypatch):
+    store = Store()
+    orchestrator = Orchestrator(store)
+
+    def unexpected_advisory(*_args, **_kwargs):
+        raise AssertionError("goal save must not invoke Advisory")
+
+    orchestrator.advisory.run = unexpected_advisory
+    monkeypatch.setattr(main, "store", store)
+    monkeypatch.setattr(main, "orch", orchestrator)
+
+    snapshot = main.set_goal(GoalIn(
+        track="miles",
+        target=60_000,
+        unitLabel="miles",
+        current=1_000,
+        deadline="2027-01-01",
+        purpose="Tokyo",
+    ))
+
+    assert snapshot["goal"]["track"] == "miles"
+    assert snapshot["goal"]["target"] == 60_000
+    assert store.get_subcollection(main.UID, "agent_runs") == []
+    assert store.get_subcollection(main.UID, "strategy_runs") == []
 
 
 def test_projection_exposes_degraded_card_and_goal_contract():

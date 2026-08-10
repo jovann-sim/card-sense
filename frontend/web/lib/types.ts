@@ -189,6 +189,9 @@ export interface PlannedItem {
   note?: string;
 }
 
+/** User-entered planned spending before the backend assigns its canonical ID. */
+export type PlannedItemDraft = Omit<PlannedItem, "id">;
+
 /* --------------------------------------------------------- track record --- */
 
 export type AdviceOutcome = "open" | "acted" | "dismissed" | "expired";
@@ -220,6 +223,8 @@ export interface TrackRecord {
 /* ------------------------------------------------------------- wallet ----- */
 
 export interface ParsedRule {
+  /** Stable identity assigned by Card Intelligence; absent on legacy snapshots. */
+  id?: string;
   categoryLabel: string;
   /** Display string only. Never calculate from this — use valuePerDollar. */
   rate: string;

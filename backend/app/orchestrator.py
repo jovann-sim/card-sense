@@ -69,7 +69,7 @@ class Orchestrator:
         self.advisory = AdvisoryAgent(runtime)
         self.cardintel = CardIntelligenceAgent(runtime)
 
-    def run(self, uid, request="Run CardSense"):
+    def run(self, uid, request="Run CardSense", *, refresh_advice=True):
         started, run_id = self._now(), uuid.uuid4().hex
         transactions = self.store.get_subcollection(uid, "transactions")
         planned = self.store.get_subcollection(uid, "planned")
@@ -85,15 +85,26 @@ class Orchestrator:
         strategy["goal"] = self.strategy.goal_projection(self.store.get_user(uid).get("goal"), strategy["captured"])
         self.store.set_subdoc(uid, "strategy_runs", run_id, strategy)
         self._log(uid, run_id, "strategy", "Simulation & strategy", "strategy_runs", ["transactions", "card_rules", "forecasts", "goal"], strategy.get("degraded"), round((perf_counter() - stage_started) * 1000))
-        stage_started = perf_counter()
-        advice = self.advisory.run(strategy, forecast, wallet)
-        for item in advice:
-            item.setdefault("outcome", "open")
-            item.setdefault("pushedAt", self._now())
-            item.setdefault("predicted", item["impact"])
-            item.setdefault("window", item["impactWindow"])
-            self.store.set_subdoc(uid, "advice", item["id"], item)
-        self._log(uid, run_id, "advisory", "Advisory", "advice", ["strategy_runs", "advice"], duration_ms=round((perf_counter() - stage_started) * 1000))
+        if refresh_advice:
+            stage_started = perf_counter()
+            advice = self.advisory.run(strategy, forecast, wallet)
+            for item in advice:
+                item.setdefault("outcome", "open")
+                item.setdefault("pushedAt", self._now())
+                item.setdefault("predicted", item["impact"])
+                item.setdefault("window", item["impactWindow"])
+                self.store.set_subdoc(uid, "advice", item["id"], item)
+            self._log(uid, run_id, "advisory", "Advisory", "advice", ["strategy_runs", "advice"], duration_ms=round((perf_counter() - stage_started) * 1000))
+        else:
+            self._log(
+                uid,
+                run_id,
+                "advisory",
+                "Advisory",
+                [],
+                ["advice"],
+                summary="Existing advice retained; deterministic state recalculated without a model call.",
+            )
         self._log(uid, run_id, "ingestion", "Ingestion", "transactions", ["plaid_items", "mcc_map"])
         card_notes = [c.get("parseNote") for c in wallet if c.get("parseStatus") != "parsed" and c.get("parseNote")]
         self._log(uid, run_id, "card-intelligence", "Card intelligence", "card_rules", ["wallet"], card_notes)
@@ -105,6 +116,44 @@ class Orchestrator:
     def empty_snapshot(self, uid):
         """Return a contract-valid initial read model without running agents."""
         return self.project(uid, "initial")
+
+    def project_planned_change(self, uid, *, added=None, removed_id=None):
+        """Patch planned spending without rerunning the Firestore-heavy pipeline."""
+        snapshot = self.store.get_snapshot(uid) or self.empty_snapshot(uid)
+        planned = [
+            item
+            for item in snapshot.get("planned", [])
+            if item.get("id") != removed_id
+        ]
+        if added is not None:
+            planned = [item for item in planned if item.get("id") != added.get("id")]
+            planned.append(added)
+        planned.sort(key=lambda item: str(item.get("startDate", "")))
+
+        snapshot["generatedAt"] = self._now()
+        snapshot["planned"] = planned
+        snapshot["forecast"] = {
+            **snapshot["forecast"],
+            "timeline": self.forecast.timeline(planned),
+        }
+        projected = Snapshot.model_validate(snapshot).model_dump(mode="json")
+        self.store.set_snapshot(uid, projected)
+        return projected
+
+    def project_goal_change(self, uid, goal):
+        """Patch a goal projection using the captured value already in the snapshot."""
+        snapshot = self.store.get_snapshot(uid) or self.empty_snapshot(uid)
+        captured = float(snapshot.get("totals", {}).get("captured", 0))
+        projected_goal = self.strategy.goal_projection(goal, captured)
+
+        snapshot["generatedAt"] = self._now()
+        snapshot["goal"] = projected_goal
+        snapshot["trackPreference"] = goal["track"]
+        snapshot["recommendedTrack"] = goal["track"]
+        snapshot["trackRationale"] = "Optimised against your stated goal."
+        projected = Snapshot.model_validate(snapshot).model_dump(mode="json")
+        self.store.set_snapshot(uid, projected)
+        return projected
 
     def project(self, uid, run_id):
         now = self._now()
@@ -139,9 +188,9 @@ class Orchestrator:
                 month = str(tx["date"])[:7]; monthly[month] = monthly.get(month, 0) + amount
         return {"spend": sum(categories.values()), "categories": categories, "monthly": monthly}
 
-    def _log(self, uid, run_id, agent, label, writes, reads, degraded=None, duration_ms=0):
+    def _log(self, uid, run_id, agent, label, writes, reads, degraded=None, duration_ms=0, summary=None):
         detail = "; ".join(degraded or []) or None
-        self.store.write_agent_run(uid, f"{run_id}-{agent}", {"id": f"{run_id}-{agent}", "runId": run_id, "agent": agent, "status": "degraded" if detail else "ok", "startedAt": self._now(), "durationMs": duration_ms, "summary": f"{label} completed.", "detail": detail, "writes": writes, "reads": reads, "retryable": False})
+        self.store.write_agent_run(uid, f"{run_id}-{agent}", {"id": f"{run_id}-{agent}", "runId": run_id, "agent": agent, "status": "degraded" if detail else "ok", "startedAt": self._now(), "durationMs": duration_ms, "summary": summary or f"{label} completed.", "detail": detail, "writes": writes, "reads": reads, "retryable": False})
 
     def _track_record(self, advice):
         acted = [a for a in advice if a.get("outcome") == "acted"]

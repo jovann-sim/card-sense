@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { PlannedItem, PlannedKind } from "@/lib/types";
+import type { PlannedItemDraft, PlannedKind } from "@/lib/types";
 
 export const CATEGORIES = [
   "Dining & restaurants",
@@ -24,7 +24,7 @@ export function PlannedForm({
   onCancel,
   defaultDate,
 }: {
-  onAdd: (item: PlannedItem) => void;
+  onAdd: (item: PlannedItemDraft) => void;
   onCancel: () => void;
   defaultDate: string;
 }) {
@@ -43,7 +43,6 @@ export function PlannedForm({
     if (!valid) return;
 
     onAdd({
-      id: `plan-${Date.now()}`,
       kind,
       label: label.trim(),
       startDate,
