@@ -728,6 +728,53 @@ def plaid_exchange(body: ExchangeTokenIn):
         raise _plaid_error(exc)
 
 
+@app.post("/api/v1/plaid/webhook")
+def plaid_webhook(body: dict):
+    """Plaid tells us a transaction landed; we pull it immediately.
+
+    This is what makes the feed current rather than a thing the user refreshes.
+    Plaid posts SYNC_UPDATES_AVAILABLE when a bank reports new activity, and the
+    handler runs the same cursor-based sync as the manual endpoint — so there is
+    one code path, whether the pull was scheduled, manual or pushed.
+
+    Note that "immediately" means when the bank posts the transaction, typically
+    minutes to a day after the card is used, because that is when Plaid learns
+    of it. Detecting the moment of purchase is the extension's job: it sees the
+    checkout page before the transaction exists anywhere.
+
+    Deliberately tolerant: a webhook that errors gets retried by Plaid, so an
+    unrecognised type is acknowledged rather than failed.
+    """
+    webhook_type = (body or {}).get("webhook_type")
+    webhook_code = (body or {}).get("webhook_code")
+    item_id = (body or {}).get("item_id")
+    logger.info("Plaid webhook %s/%s for item %s", webhook_type, webhook_code, item_id)
+
+    if webhook_type != "TRANSACTIONS":
+        return {"ok": True, "handled": False, "reason": f"Ignoring {webhook_type}"}
+
+    # SYNC_UPDATES_AVAILABLE is the modern signal; the older per-count codes
+    # mean the same thing for a cursor-based puller.
+    if webhook_code not in {"SYNC_UPDATES_AVAILABLE", "DEFAULT_UPDATE", "INITIAL_UPDATE",
+                            "HISTORICAL_UPDATE", "TRANSACTIONS_REMOVED"}:
+        return {"ok": True, "handled": False, "reason": f"Ignoring {webhook_code}"}
+
+    if not settings.use_plaid:
+        return {"ok": True, "handled": False, "reason": "Plaid is not configured"}
+
+    try:
+        result = plaid_sync(SyncIn(userId=UID, itemId=item_id))
+    except HTTPException as exc:
+        # Returning 200 stops Plaid retrying something that will never succeed,
+        # such as an Item we no longer hold.
+        logger.warning("Webhook sync failed: %s", exc.detail)
+        return {"ok": False, "handled": False, "reason": str(exc.detail)}
+
+    return {"ok": True, "handled": True,
+            "added": result.get("added"), "modified": result.get("modified"),
+            "removed": result.get("removed")}
+
+
 @app.post("/api/v1/plaid/sync")
 def plaid_sync(body: SyncIn):
     started = perf_counter()
