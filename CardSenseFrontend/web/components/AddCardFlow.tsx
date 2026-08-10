@@ -50,6 +50,7 @@ export function AddCardFlow({
   const [network, setNetwork] = useState(manualFor?.network ?? "Visa");
   const [track, setTrack] = useState<string>(manualFor?.track ?? "cashback");
   const [rules, setRules] = useState<ParsedRule[]>(manualFor ? [BLANK_RULE] : []);
+  const [file, setFile] = useState<File | null>(null);
 
   const payload = () => ({
     name: name.trim() || "Untitled card",
@@ -60,17 +61,29 @@ export function AddCardFlow({
     termsUrl: source.trim() || null,
   });
 
-  /** Hand the link to the agent and show back whatever it actually read. */
+  /** Hand the document to the agent and show back whatever it actually read. */
   async function readTerms(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError(null);
     setPhase("reading");
     try {
-      const response = await api<CardResponse>("/api/v1/cards", {
+      let response = await api<CardResponse>("/api/v1/cards", {
         method: "POST",
         body: JSON.stringify(payload()),
       });
+      // A PDF on disk cannot be fetched by URL, so the card is created first
+      // and the file posted against it.
+      if (file && response.card.cardId) {
+        const form = new FormData();
+        form.append("file", file);
+        const uploaded = await fetch(
+          `/api/backend/api/v1/cards/${encodeURIComponent(response.card.cardId)}/terms`,
+          { method: "POST", body: form },
+        );
+        if (!uploaded.ok) throw new Error(await uploaded.text());
+        response = (await uploaded.json()) as CardResponse;
+      }
       const card = response.card as Extraction;
       setResult(card);
       setRules(card.rules?.length ? card.rules : [BLANK_RULE]);
@@ -175,13 +188,23 @@ export function AddCardFlow({
             </label>
 
             <label className="field field--wide">
-              <span className="field__label">Terms link or PDF</span>
+              <span className="field__label">Terms link</span>
               <input
                 className="field__input"
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
                 placeholder="https://issuer.com/terms.pdf"
-                required
+                required={!file}
+              />
+            </label>
+
+            <label className="field field--wide">
+              <span className="field__label">Or a PDF from your computer</span>
+              <input
+                className="field__input"
+                type="file"
+                accept="application/pdf,text/html,text/plain"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
             </label>
           </div>

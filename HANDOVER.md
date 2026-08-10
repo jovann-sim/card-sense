@@ -206,21 +206,60 @@ call it on a cycle.
 
 ---
 
+## 5b. Extraction quality, measured
+
+`backend/evals/` holds ten reward structures chosen to break the schema —
+nominated categories, rotating categories, transaction-count conditions, spend
+tiers, relationship multipliers, statement credits, reward-currency choice.
+
+```bash
+cd backend && source .venv/bin/activate && python -m evals.run_extraction_eval
+```
+
+It calls Gemini, so it costs money and takes a few minutes. Run it after
+changing the schema or the prompt.
+
+**Capture rate went from 7/10 to 9/10.** The single most useful finding was
+that repeated runs of the same document disagree: across three baseline runs
+capture moved between 70% and 80% and *the misses moved too* — a run that
+dropped a nomination requirement caught a spend-elsewhere condition, and the
+next did the reverse.
+
+Because those misses are uncorrelated, extraction now runs **twice and merges
+the passes additively** (`app/agents/consolidate.py`). A condition either pass
+found is kept; a rule only one pass saw is not promoted, so merging never
+invents coverage. Card intelligence runs weekly per card, so the second call is
+cheap. Set `EXTRACTION_PASSES=1` to disable.
+
+The eval also caught two regressions I introduced: a stricter prompt made UOB
+One fail outright, because its value is a fixed quarterly rebate rather than a
+rate — benefits-only cards are now valid extractions — and a benefits-only pass
+was being discarded during merging.
+
 ## 6. Next steps
 
 Roughly in order of value:
 
-1. **Fill missing MCC codes from a curated map** when the model omits them.
-   Highest-value fix for simulation accuracy, and small.
-2. **Confirm the reward valuations.** One file, immediate effect on every
-   figure in the product.
-3. **Wire the weekly recheck** into the orchestrator run, so `stale` and the
-   recheck cadence mean something.
-4. **Decide on headless rendering** for JavaScript issuer pages, or accept
+~~1. Fill missing MCC codes from a curated map~~ — done, `app/mcc.py`.
+~~3. Wire the weekly recheck into the orchestrator~~ — done; cards past
+`nextRecheckAt` are reread before the optimiser prices anything.
+~~5. File picker for local PDFs~~ — done.
+~~6. Feed `conditional-rate` into the advisory agent~~ — done; a conditional
+rate now produces a "unlock the bonus rate" recommendation, and an unreadable
+card produces one telling you it is excluded.
+
+Still open:
+
+1. **Confirm the reward valuations.** One file, immediate effect on every
+   figure in the product. The divergence check already caught one error here:
+   UNI$ was priced at one mile when it transfers at two.
+2. **Decide on headless rendering** for JavaScript issuer pages, or accept
    PDF-only and say so in the interface.
-5. **File picker for local PDFs** — the endpoint already exists.
-6. **Feed `conditional-rate` into the advisory agent**, so a recommendation can
-   say "nominate dining on your Lady's Card" rather than assuming it is done.
+3. **Use benefit conditions in the optimiser.** They are structured now — a
+   UOB One rebate carries its spend threshold and transaction count — but
+   strategy does not yet evaluate them.
+4. **Track eval results over time** so a prompt change that helps one card and
+   breaks another is visible.
 
 ### Still open
 
