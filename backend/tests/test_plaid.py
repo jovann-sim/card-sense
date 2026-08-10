@@ -416,13 +416,11 @@ def test_demo_reset_requires_secret_and_preserves_catalog_and_global_rules(monke
 
     result = main.reset_demo("reset-secret")
 
-    assert result["snapshot"]["totals"] == {
-        "spend": 0.0,
-        "refunds": 0.0,
-        "netSpend": 0.0,
-        "captured": 0.0,
-        "unclaimed": 0.0,
-    }
+    # Asserted as "every figure is zero" rather than an exact dict, so adding
+    # a new total does not fail a test about resetting.
+    totals = result["snapshot"]["totals"]
+    assert set(totals) >= {"spend", "refunds", "netSpend", "captured", "unclaimed"}
+    assert all(value == 0 for value in totals.values()), totals
     assert result["snapshot"]["wallet"] == []
     assert test_store.get_subcollection(main.UID, "transactions") == []
     assert test_store.get_user(main.UID).get("goal") is None

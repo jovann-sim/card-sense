@@ -5,7 +5,7 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..plaid_taxonomy import classify
+from ..plaid_taxonomy import classify, is_redirectable
 
 
 def is_eligible_purchase(transaction: dict) -> bool:
@@ -66,6 +66,10 @@ class IngestionAgent:
             # counting it would inflate every reward figure downstream.
             "isPurchase": is_purchase,
             "categoryAmbiguous": mcc is None and is_purchase,
+            # Earns nothing on a card today because the biller will not take
+            # one, but a payment service could route it. Recorded now so the
+            # optimiser can weigh the fee against the reward later.
+            "isRedirectable": is_redirectable(label, is_purchase),
             "description": tx.get("name") or "",
             "pending": bool(tx.get("pending", False)),
             "currency": tx.get("iso_currency_code") or tx.get("unofficial_currency_code"),
