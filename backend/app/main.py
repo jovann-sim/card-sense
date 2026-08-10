@@ -644,6 +644,19 @@ def plaid_sandbox_seed(body: LinkTokenIn):
     if (settings.plaid_env or "sandbox").lower() != "sandbox":
         raise HTTPException(400, "This endpoint only exists for the sandbox environment.")
 
+    # Each seed mints a NEW Item with new account and transaction ids, so the
+    # same synthetic purchases arrive again under different identities and
+    # nothing dedupes them. Seeding four times quadrupled reported spend.
+    # Clearing first makes reseeding idempotent, which is what a test loop needs.
+    uid_to_clear = _uid(body.userId)
+    for collection in ("plaid_items", "plaid_accounts", "transactions"):
+        for row in store.get_subcollection(uid_to_clear, collection):
+            if row.get("id"):
+                store.delete_subdoc(uid_to_clear, collection, row["id"])
+    for card in store.get_wallet(uid_to_clear):
+        if card.get("accountId"):
+            store.set_subdoc(uid_to_clear, "wallet", card["cardId"], {"accountId": None})
+
     from plaid.model.products import Products
     from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
 
@@ -713,6 +726,53 @@ def plaid_exchange(body: ExchangeTokenIn):
         return {"ok": True, "itemId": item_id, "accounts": len(accounts), "linked": linked}
     except Exception as exc:
         raise _plaid_error(exc)
+
+
+@app.post("/api/v1/plaid/webhook")
+def plaid_webhook(body: dict):
+    """Plaid tells us a transaction landed; we pull it immediately.
+
+    This is what makes the feed current rather than a thing the user refreshes.
+    Plaid posts SYNC_UPDATES_AVAILABLE when a bank reports new activity, and the
+    handler runs the same cursor-based sync as the manual endpoint — so there is
+    one code path, whether the pull was scheduled, manual or pushed.
+
+    Note that "immediately" means when the bank posts the transaction, typically
+    minutes to a day after the card is used, because that is when Plaid learns
+    of it. Detecting the moment of purchase is the extension's job: it sees the
+    checkout page before the transaction exists anywhere.
+
+    Deliberately tolerant: a webhook that errors gets retried by Plaid, so an
+    unrecognised type is acknowledged rather than failed.
+    """
+    webhook_type = (body or {}).get("webhook_type")
+    webhook_code = (body or {}).get("webhook_code")
+    item_id = (body or {}).get("item_id")
+    logger.info("Plaid webhook %s/%s for item %s", webhook_type, webhook_code, item_id)
+
+    if webhook_type != "TRANSACTIONS":
+        return {"ok": True, "handled": False, "reason": f"Ignoring {webhook_type}"}
+
+    # SYNC_UPDATES_AVAILABLE is the modern signal; the older per-count codes
+    # mean the same thing for a cursor-based puller.
+    if webhook_code not in {"SYNC_UPDATES_AVAILABLE", "DEFAULT_UPDATE", "INITIAL_UPDATE",
+                            "HISTORICAL_UPDATE", "TRANSACTIONS_REMOVED"}:
+        return {"ok": True, "handled": False, "reason": f"Ignoring {webhook_code}"}
+
+    if not settings.use_plaid:
+        return {"ok": True, "handled": False, "reason": "Plaid is not configured"}
+
+    try:
+        result = plaid_sync(SyncIn(userId=UID, itemId=item_id))
+    except HTTPException as exc:
+        # Returning 200 stops Plaid retrying something that will never succeed,
+        # such as an Item we no longer hold.
+        logger.warning("Webhook sync failed: %s", exc.detail)
+        return {"ok": False, "handled": False, "reason": str(exc.detail)}
+
+    return {"ok": True, "handled": True,
+            "added": result.get("added"), "modified": result.get("modified"),
+            "removed": result.get("removed")}
 
 
 @app.post("/api/v1/plaid/sync")
@@ -795,10 +855,14 @@ def plaid_sync(body: SyncIn):
         transactions = _rebuild_ingestion_from_store(uid)
         # Plaid connection should not wait for a Gemini advisory call. Existing
         # advice remains valid while deterministic totals and strategy refresh.
+        # Skipping the model keeps a bank connection fast, but that is only
+        # safe when there is advice to retain. On a first sync there is none,
+        # so the dashboard would show nothing to do and a track record of
+        # "0 of 0", which reads as broken rather than as an optimisation.
         run_id, snap = orch.run(
             uid,
             "Analyse newly synced Plaid transactions",
-            refresh_advice=False,
+            refresh_advice=not store.get_subcollection(uid, "advice"),
         )
         logger.info("plaid_sync uid=%s duration_ms=%d added=%d modified=%d removed=%d", uid, round((perf_counter() - started) * 1000), totals["added"], totals["modified"], totals["removed"])
 

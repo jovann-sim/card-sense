@@ -8,6 +8,9 @@ from datetime import date, timedelta
 from .ingestion import is_eligible_purchase
 from ..valuations import VALUATIONS  # noqa: F401  (re-exported; orchestrator imports it from here)
 
+# Labels meaning "we could not place this", however they were produced.
+UNCATEGORISED = {"uncategorised", "uncategorized", "unknown", ""}
+
 
 def mcc_in(mcc: str, codes: list[str]) -> bool:
     """Whether an MCC appears in a list of individual codes or ranges."""
@@ -76,6 +79,15 @@ class StrategyAgent:
         for category, rows in grouped.items():
             spend = sum(float(row.get("amount", 0)) for row in rows)
             if spend <= 0:
+                continue
+
+            # Spending we could not categorise is left out of the comparison
+            # entirely, on both sides. Crediting it at the base rate would add
+            # the same figure to captured and to optimal, which understates the
+            # gap as a proportion and makes a cashback percentage read lower
+            # than the card actually pays. It still counts as spend — it was
+            # spent — it simply cannot be optimised, and the interface says so.
+            if not category or str(category).lower() in UNCATEGORISED:
                 continue
 
             # A display category can contain several different MCCs. Price
