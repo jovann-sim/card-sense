@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents.card_intelligence import CardIntelligenceAgent
+from app.agents.card_intelligence import CardIntelligenceAgent, with_rule_ids
 from app.agents.runtime import ModelUnavailable
 from app.agents.schema import ExtractionResult, display_rate, value_per_dollar
 from app.agents.strategy import StrategyAgent
@@ -173,6 +173,17 @@ def test_successful_extraction_prices_sorts_and_records_provenance():
     assert result["rules"][0]["cap"] == 600.0
     assert result["source"]["locator"] == "pasted text"
     assert result["nextRecheckAt"] > result["source"]["retrievedAt"]
+    assert all(rule["id"].startswith("rule-") for rule in result["rules"])
+
+
+def test_rule_ids_are_stable_and_unique_for_duplicate_rules():
+    rules = [rule(), rule(), rule(categoryLabel="Groceries")]
+
+    first = with_rule_ids(rules)
+    second = with_rule_ids(rules)
+
+    assert [item["id"] for item in first] == [item["id"] for item in second]
+    assert len({item["id"] for item in first}) == len(first)
 
 
 # -- reward caps normalised to spend ---------------------------------------

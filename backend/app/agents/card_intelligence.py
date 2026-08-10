@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -51,6 +53,28 @@ CONDITION_WORDS = {
     "promotional_period": "time-limited",
     "spend_elsewhere": "requires spend elsewhere",
 }
+
+
+def with_rule_ids(rules: list[dict]) -> list[dict]:
+    """Attach deterministic, sibling-unique IDs to projected reward rules."""
+    used: set[str] = set()
+    identified: list[dict] = []
+    for rule in rules:
+        data = {**rule}
+        payload = {key: value for key, value in data.items() if key != "id"}
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()[:16]
+        base = str(data.get("id") or f"rule-{digest}")
+        candidate = base
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        data["id"] = candidate
+        used.add(candidate)
+        identified.append(data)
+    return identified
 
 
 def _restrictions(rule: dict) -> list[str]:
@@ -200,6 +224,7 @@ class CardIntelligenceAgent:
                 "currency": currency,
             })
         rules.sort(key=lambda item: item["valuePerDollar"], reverse=True)
+        rules = with_rule_ids(rules)
 
         today = datetime.now(timezone.utc).date()
         return {

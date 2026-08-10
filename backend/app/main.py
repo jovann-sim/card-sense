@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.terms import document_from_upload
+from .agents.card_intelligence import with_rule_ids
 from .valuations import BASE_CURRENCY
 from .config import settings
 from .store import store
@@ -64,6 +65,16 @@ def _uid(user_id: str | None = None) -> str:
 
 def _plaid_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail=f"Plaid request failed: {exc}")
+
+
+def _plaid_transactions_sync_request(access_token: str, cursor: str | None):
+    """Plaid requires an absent initial cursor, not an explicit null value."""
+    from plaid.model.transactions_sync_request import TransactionsSyncRequest
+
+    values = {"access_token": access_token}
+    if cursor is not None:
+        values["cursor"] = cursor
+    return TransactionsSyncRequest(**values)
 
 
 @app.on_event("startup")
@@ -209,23 +220,20 @@ def run_status(run_id: str):
 def add_planned(body: PlannedItemIn):
     item = {"id": uuid.uuid4().hex, **body.model_dump(mode="json")}
     store.add_subdoc(UID, "planned", item, item["id"])
-    _, snap = orch.run(UID, "Recalculate after planned spending change")
-    return snap
+    return orch.project_planned_change(UID, added=item)
 
 
 @app.delete("/api/v1/planned/{planned_id}", response_model=Snapshot)
 def delete_planned(planned_id: str):
     store.delete_subdoc(UID, "planned", planned_id)
-    _, snap = orch.run(UID, "Recalculate after planned spending removal")
-    return snap
+    return orch.project_planned_change(UID, removed_id=planned_id)
 
 
 @app.post("/api/v1/goals", response_model=Snapshot)
 def set_goal(body: GoalIn):
     goal = body.model_dump(mode="json")
     store.set_user(UID, {"goal": goal})
-    _, snap = orch.run(UID, "Recalculate after goal change")
-    return snap
+    return orch.project_goal_change(UID, goal)
 
 
 @app.post("/api/v1/advice/{advice_id}/resolve", response_model=Snapshot)
@@ -250,6 +258,7 @@ def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
     Provenance, cadence and the failure reason all come from the agent now — the
     API no longer invents a source label or a recheck date the agent never set.
     """
+    rules = with_rule_ids(parsed.get("rules", []))
     card_detail = {
         "name": card["name"],
         "last4": card["last4"],
@@ -258,7 +267,7 @@ def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
         "track": card["track"],
         "cardId": card_id,
         "accountId": card.get("accountId"),
-        "rules": parsed.get("rules", []),
+        "rules": rules,
         "characteristics": parsed.get("characteristics", {}),
         # The card's own billing currency. Rendered rather than converted.
         "currency": parsed.get("currency", BASE_CURRENCY),
@@ -275,7 +284,7 @@ def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
         card_detail["documentSummary"] = parsed["documentSummary"]
 
     store.set_global_doc("card_rules", card_id, {
-        "rules": parsed.get("rules", []),
+        "rules": rules,
         "characteristics": parsed.get("characteristics", {}),
         "source": parsed["source"],
         "status": card_detail["parseStatus"],
@@ -375,7 +384,11 @@ def delete_card(wallet_or_card_id: str):
         raise HTTPException(404, "Card not found in wallet")
     # Rules are global card knowledge; only remove this user's wallet reference.
     store.delete_subdoc(UID, "wallet", card.get("walletId") or card.get("id") or wallet_or_card_id)
-    _, snap = orch.run(UID, "Recalculate after card removed")
+    _, snap = orch.run(
+        UID,
+        "Recalculate after card removed",
+        refresh_advice=False,
+    )
     return snap
 
 
@@ -456,8 +469,6 @@ def plaid_sync(body: SyncIn):
         if not items:
             raise HTTPException(404, "No Plaid Item connected for this user")
 
-        from plaid.model.transactions_sync_request import TransactionsSyncRequest
-
         client = get_plaid_client()
         totals = {"added": 0, "modified": 0, "removed": 0}
         cursors = []
@@ -468,9 +479,9 @@ def plaid_sync(body: SyncIn):
             item_added = item_modified = item_removed = 0
 
             while has_more:
-                request = TransactionsSyncRequest(
-                    access_token=item["accessToken"],
-                    cursor=current_cursor,
+                request = _plaid_transactions_sync_request(
+                    item["accessToken"],
+                    current_cursor,
                 )
                 response = client.transactions_sync(request)
                 data = response.to_dict()
