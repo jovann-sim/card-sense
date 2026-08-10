@@ -6,10 +6,10 @@ from datetime import date, timedelta
 
 
 from .ingestion import is_eligible_purchase
-from ..valuations import VALUATIONS
+from ..valuations import VALUATIONS  # noqa: F401  (re-exported; orchestrator imports it from here)
 
 # Labels meaning "we could not place this", however they were produced.
-UNCATEGORISED = {"uncategorised", "uncategorized", "unknown", ""}  # noqa: F401  (re-exported; orchestrator imports it from here)
+UNCATEGORISED = {"uncategorised", "uncategorized", "unknown", ""}
 
 
 def mcc_in(mcc: str, codes: list[str]) -> bool:

@@ -87,3 +87,18 @@ def unit_value(reward_currency: str | None, reward_type: str = "points") -> tupl
     if key:
         return fallback[0], f"{fallback[1]} Programme named as “{reward_currency}”."
     return fallback
+
+
+# Two reward options on the same rule describe one reward paid two ways, so
+# they should price to roughly the same figure. A wide gap means either the
+# extraction misread a conversion or a programme is mispriced — both worth
+# saying out loud rather than quietly feeding into a recommendation.
+DIVERGENCE_TOLERANCE = 0.35
+
+
+def divergence(values: list[float]) -> float:
+    """How far apart the priced options are, as a fraction of the largest."""
+    priced = [v for v in values if v > 0]
+    if len(priced) < 2:
+        return 0.0
+    return (max(priced) - min(priced)) / max(priced)

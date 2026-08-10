@@ -69,8 +69,11 @@ def test_miles_price_through_the_reward_currency():
 
 
 def test_points_price_through_the_reward_currency():
+    """Derived from the table, so confirming a valuation does not fail a test."""
+    from app.valuations import DEFAULT_UNIT_VALUES
+    default, _ = DEFAULT_UNIT_VALUES["points"]
     priced = value_per_dollar(rule(rewardType="points", rateValue=10, rateUnit="points_per_dollar"))
-    assert priced == pytest.approx(0.1)
+    assert priced == pytest.approx(10 * default)
 
 
 def test_display_rate_reads_naturally_per_reward_type():
