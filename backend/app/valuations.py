@@ -17,28 +17,37 @@ BASE_CURRENCY = "USD"
 # the number it produced. Confirm them against real redemptions before the
 # numbers are presented as advice.
 REWARD_UNIT_VALUES: dict[str, tuple[float, str]] = {
-    # US transferable bank currencies. These are the ones that matter, because
-    # every major US card earns into one of them.
-    "membership rewards": (0.020, "Placeholder: ~2.0 cents via airline transfer partners. Confirm."),
-    "ultimate rewards": (0.0205, "Placeholder: ~2.05 cents via transfer partners. Confirm."),
-    "thankyou points": (0.018, "Placeholder: ~1.8 cents via transfer partners. Confirm."),
-    "venture miles": (0.0185, "Placeholder: Capital One miles, ~1.85 cents via transfers. Confirm."),
-    "capital one miles": (0.0185, "Placeholder: ~1.85 cents via transfer partners. Confirm."),
-    "bilt points": (0.0205, "Placeholder: ~2.05 cents via transfer partners. Confirm."),
+    # Figures are dollars per unit, checked August 2026 against Upgraded Points
+    # and CardRatings. Where the two disagreed the midpoint is used and both
+    # numbers are named, because the spread is the honest uncertainty: a mile is
+    # worth what you redeem it for, and these are averages over redemptions
+    # people actually make.
+    #
+    # Transferable bank currencies — what most US cards earn into.
+    "membership rewards": (0.021, "Aug 2026: Upgraded Points 2.2c, CardRatings 2.0c. Midpoint."),
+    "ultimate rewards": (0.020, "Aug 2026: Upgraded Points 2.0c, CardRatings 2.05c. Midpoint."),
+    "thankyou points": (0.0165, "Aug 2026: Upgraded Points 1.6c, CardRatings 1.7c. Midpoint."),
+    "venture miles": (0.018, "Aug 2026: both sources 1.8c."),
+    "capital one miles": (0.018, "Aug 2026: both sources 1.8c."),
+    "bilt points": (0.020, "Aug 2026: Upgraded Points 2.0c."),
 
-    # US airline and hotel programmes
-    "skymiles": (0.012, "Placeholder: Delta, ~1.2 cents. Confirm."),
-    "aadvantage": (0.014, "Placeholder: American, ~1.4 cents. Confirm."),
-    "mileageplus": (0.013, "Placeholder: United, ~1.3 cents. Confirm."),
-    "rapid rewards": (0.014, "Placeholder: Southwest, ~1.4 cents and revenue-based. Confirm."),
-    "alaska mileage plan": (0.015, "Placeholder: ~1.5 cents. Confirm."),
-    "jetblue trueblue": (0.013, "Placeholder: ~1.3 cents. Confirm."),
-    "marriott bonvoy": (0.0075, "Placeholder: ~0.75 cents. Confirm."),
-    "hilton honors": (0.005, "Placeholder: ~0.5 cents. Confirm."),
-    "world of hyatt": (0.017, "Placeholder: ~1.7 cents, the strongest hotel currency. Confirm."),
-    "ihg one rewards": (0.005, "Placeholder: ~0.5 cents. Confirm."),
+    # Airline programmes
+    "aadvantage": (0.014, "Aug 2026: Upgraded Points 1.4c."),
+    "skymiles": (0.012, "Aug 2026: Upgraded Points 1.2c."),
+    "mileageplus": (0.012, "Aug 2026: Upgraded Points 1.2c."),
+    "rapid rewards": (0.013, "Aug 2026: Upgraded Points 1.3c. Revenue-based, so unusually stable."),
+    "atmos rewards": (0.016, "Aug 2026: Upgraded Points 1.6c. Alaska's programme, renamed from Mileage Plan."),
+    "alaska mileage plan": (0.016, "Aug 2026: 1.6c. Now branded Atmos Rewards."),
+    "jetblue trueblue": (0.013, "Aug 2026: Upgraded Points 1.3c."),
 
-    # Cash-equivalent programmes. Redeemable at face value, so no discount.
+    # Hotel programmes. Worth far less per point, and the spread between them
+    # is wide enough that treating them alike would be a real error.
+    "world of hyatt": (0.014, "Aug 2026: Upgraded Points 1.4c. The strongest hotel currency."),
+    "marriott bonvoy": (0.007, "Aug 2026: Upgraded Points 0.7c."),
+    "hilton honors": (0.005, "Aug 2026: Upgraded Points 0.5c."),
+    "ihg one rewards": (0.005, "Aug 2026: Upgraded Points 0.5c."),
+
+    # Cash-equivalent programmes redeem at face value, so no discount applies.
     "reward dollars": (1.0, "Amex Reward Dollars redeem as a statement credit at face value."),
     "cash rewards": (1.0, "Redeems as cash or statement credit at face value."),
     "discover cashback bonus": (1.0, "Redeems as cash at face value."),

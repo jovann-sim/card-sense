@@ -83,6 +83,45 @@ PFC_TO_MCC: dict[str, tuple[str, str]] = {
 
     "GOVERNMENT_AND_NON_PROFIT_TAX_PAYMENT": ("9311", "Government"),
     "GOVERNMENT_AND_NON_PROFIT_DONATIONS": ("8398", "Government"),
+
+    # The rest of Plaid's taxonomy. Every unmapped detail falls back to a
+    # primary, and every unmapped primary falls to "Uncategorised" — which is
+    # now excluded from the reward comparison entirely, so a gap here is not a
+    # wrong number, it is spending no card can be judged on. Worth closing.
+    "FOOD_AND_DRINK_BAKERIES": ("5462", "Dining"),
+    "TRAVEL_PUBLIC_TRANSIT": ("4111", "Transit"),
+    "TRAVEL_PARKING": ("7523", "Transit"),
+    "TRAVEL_GAS": ("5541", "Fuel"),
+    "TRAVEL_TAXIS_AND_RIDE_SHARES": ("4121", "Transit"),
+    "TRANSPORTATION_CAR_RENTAL": ("7512", "Car rental"),
+    "TRANSPORTATION_AUTO_MAINTENANCE": ("7538", "Auto"),
+    "TRANSPORTATION_AUTO_PAYMENT": ("5511", "Auto"),
+
+    "GENERAL_MERCHANDISE_SUPERSTORES_AND_WAREHOUSE_CLUBS": ("5300", "Wholesale clubs"),
+    "GENERAL_MERCHANDISE_ONLINE_SHOPPING": ("5399", "Online retail"),
+    "GENERAL_MERCHANDISE_TOBACCO_AND_VAPE": ("5993", "Online retail"),
+
+    "ENTERTAINMENT_TV_AND_MOVIES": ("5815", "Streaming"),
+    "ENTERTAINMENT_MUSIC_AND_AUDIO_SUBSCRIPTIONS": ("5815", "Streaming"),
+
+    "PERSONAL_CARE_OTHER": ("7298", "Beauty"),
+    "MEDICAL_EYE_CARE": ("8043", "Medical"),
+    "MEDICAL_NURSING_CARE": ("8050", "Medical"),
+    "MEDICAL_VETERINARY_SERVICES": ("0742", "Medical"),
+
+    "GENERAL_SERVICES_ACCOUNTING_AND_FINANCIAL_PLANNING": ("8931", "Services"),
+    "GENERAL_SERVICES_AUTOMOTIVE": ("7538", "Auto"),
+    "GENERAL_SERVICES_CHILDCARE": ("8351", "Services"),
+    "GENERAL_SERVICES_CONSULTING_AND_LEGAL": ("8111", "Services"),
+    "GENERAL_SERVICES_POSTAGE_AND_SHIPPING": ("4215", "Services"),
+    "GENERAL_SERVICES_STORAGE": ("4225", "Services"),
+
+    "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE": ("1520", "Home improvement"),
+    "HOME_IMPROVEMENT_SECURITY": ("7393", "Home improvement"),
+
+    "RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT": ("4900", "Utilities"),
+
+    "GOVERNMENT_AND_NON_PROFIT_GOVERNMENT_DEPARTMENTS_AND_AGENCIES": ("9399", "Government"),
 }
 
 # Fallback when only the primary category is known.
@@ -98,6 +137,8 @@ PFC_PRIMARY_TO_MCC: dict[str, tuple[str, str]] = {
     "HOME_IMPROVEMENT": ("5200", "Home improvement"),
     "GENERAL_SERVICES": ("7399", "Services"),
     "GOVERNMENT_AND_NON_PROFIT": ("9311", "Government"),
+    # Plaid's catch-all. It genuinely tells us nothing, so it stays
+    # uncategorised rather than being assigned a code we invented.
 }
 
 # Money moving, not money spent. A credit card bill payment, a transfer between

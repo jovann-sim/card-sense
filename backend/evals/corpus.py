@@ -11,45 +11,46 @@ from __future__ import annotations
 CORPUS = [
     {
         "id": "nominated-category",
-        "name": "UOB Lady's Card",
-        "stresses": "Holder nominates the bonus category; a linked savings account raises the rate",
-        "track": "miles",
-        "terms": """UOB Lady's Card. Cardmembers nominate ONE preferred spend category to earn bonus UNI$.
-Selectable categories: Beauty & Wellness, Dining, Entertainment, Family, Fashion, Transport, Travel.
-Earn 10 UNI$ per S$5 spent in your nominated category (4 miles per S$1), capped at 3,600 UNI$ per calendar quarter.
-All other retail spend earns the base rate of 1 UNI$ per S$5 (0.4 miles per S$1), no cap.
-Cardmembers who maintain a UOB One Account earn an additional 0.2 miles per S$1 on nominated categories.
-Excluded: insurance premiums, utility bills, government payments, top-ups to payment wallets.
-Annual fee S$196.20 waived for the first year. Minimum annual income S$30,000.""",
-        "expect": {"requiresSelection": True, "conditions": {"category_selection", "banking_relationship"}},
+        "name": "US Bank Cash+ Visa Signature",
+        "stresses": "Holder nominates TWO 5% categories and one 2% category, each capped and requiring enrolment",
+        "track": "cashback",
+        "terms": """U.S. Bank Cash+ Visa Signature Card. Choose two categories to earn 5% cash back
+on the first $2,000 in combined eligible net purchases each quarter.
+Eligible 5% categories: home utilities, TV/internet/streaming services, fast food, cell phone providers,
+electronics stores, department stores, movie theaters, gyms and fitness centers, furniture stores,
+ground transportation, select clothing stores, sporting goods stores.
+Choose one everyday category to earn 2% cash back with no cap: gas stations and EV charging,
+grocery stores, or restaurants. All other eligible purchases earn 1% cash back.
+Categories must be selected each quarter; purchases before selection earn 1%.
+No annual fee.""",
+        "expect": {"requiresSelection": True, "conditions": {"category_selection", "enrolment"}},
     },
     {
         "id": "reward-currency-choice",
-        "name": "DBS yuu Card",
-        "stresses": "Holder chooses yuu Points or cash back; merchant-scoped; minimum spend unlocks a higher tier",
-        "track": "cashback",
-        "terms": """DBS yuu Card. Cardmembers choose how they are rewarded: yuu Points OR cash back.
-Earn 18% back at yuu partners — Cold Storage, Giant, Guardian, 7-Eleven, KFC, Pizza Hut, Duty Free Singapore —
-when you spend a minimum of S$600 in a calendar month. Without the minimum spend, partner spend earns 5%.
-Rewards at partners are capped at S$60 cash back or 6,000 yuu Points per calendar month.
-All other spend earns 0.3% cash back, or 0.4 yuu Points per S$1, with no cap.
-Online food delivery via foodpanda and Deliveroo earns the partner rate.
-Excluded: AXS, bill payments, insurance, top-ups. Annual fee S$196.20 waived for two years.""",
-        "expect": {"reward_choice": True, "merchants": True},
+        "name": "Bilt Mastercard",
+        "stresses": "Rewards require a transaction count; rent earns only up to a cap; points transfer to many programmes",
+        "track": "points",
+        "terms": """Bilt Mastercard. Earn 1X point per dollar on rent with no transaction fee,
+on up to 100,000 points per calendar year. Earn 3X points on dining, 2X points on travel,
+and 1X points on all other purchases.
+You must make at least 5 transactions each statement period to earn any points that period.
+Points transfer 1:1 to airline and hotel partners including American AAdvantage,
+United MileagePlus, and World of Hyatt. No annual fee.""",
+        "expect": {"conditions": {"transaction_count"}},
     },
     {
         "id": "transaction-count",
-        "name": "UOB One Card",
-        "stresses": "Rebate requires a minimum NUMBER of transactions as well as a spend amount, in tiers",
+        "name": "Wells Fargo Attune",
+        "stresses": "Rate applies to an unusual grab-bag of categories with an enrolment-gated bonus",
         "track": "cashback",
-        "terms": """UOB One Card. Quarterly cash rebate requires a minimum of 5 card transactions per statement month
-in each month of the quarter, and a minimum spend in every month of the quarter.
-Spend at least S$500 each month: rebate S$50 per quarter.
-Spend at least S$1,000 each month: rebate S$100 per quarter.
-Spend at least S$2,000 each month: rebate S$200 per quarter.
-Missing the transaction count or the minimum spend in any month forfeits the rebate for the whole quarter.
-Excluded: AXS, SAM, iBanking bill payments, insurance premiums.""",
-        "expect": {"conditions": {"minimum_spend", "transaction_count"}, "statement_credits": True},
+        "terms": """Wells Fargo Attune Card. Earn 4% cash back on self-care, sport, recreation,
+impact and entertainment purchases: gym memberships, fitness services, spa services, salons,
+sporting events, concerts, movie theaters, public transit, electric vehicle charging,
+donations to select charities, and pet supplies.
+Earn 1% cash back on all other purchases.
+New cardholders earn a $100 cash rewards bonus after spending $500 in purchases
+in the first 3 months. No annual fee.""",
+        "expect": {"conditions": {"minimum_spend", "new_customer"}},
     },
     {
         "id": "rotating-activation",
@@ -117,29 +118,31 @@ Annual fee $95, waived the first year.""",
     },
     {
         "id": "mcc-scoped-points",
-        "name": "Citi Rewards Card (SG)",
-        "stresses": "Bonus is scoped to specific MCCs with a long exclusion list; cap stated in points",
-        "track": "miles",
-        "terms": """Citi Rewards Card. Earn 10X Citi ThankYou Points on shopping — apparel, department stores,
-bags and shoes — and on online purchases in these categories, equal to 4 miles per S$1.
-Capped at 10,000 bonus points per statement month.
-Earn 1X point per S$1 on all other retail spend, equal to 0.4 miles per S$1.
-Online travel, mobile wallet top-ups, utilities, insurance, education and government
-transactions are excluded from the 10X rate and earn 1X.
-Merchant category codes for the bonus include 5311, 5611, 5621, 5631, 5641, 5651, 5661, 5691, 5699.""",
-        "expect": {"mcc": True, "exclusions": True},
+        "name": "American Express Gold",
+        "stresses": "Several rates scoped to different MCC sets, one annually capped, plus monthly credits",
+        "track": "points",
+        "terms": """American Express Gold Card. Earn 4X Membership Rewards points at restaurants worldwide,
+including takeout and delivery in the U.S., on up to $50,000 in purchases per calendar year, then 1X.
+Earn 4X points at U.S. supermarkets on up to $25,000 in purchases per calendar year, then 1X.
+Earn 3X points on flights booked directly with airlines or on amextravel.com.
+Earn 1X points on all other eligible purchases.
+Superstores, specialty stores and warehouse clubs are not U.S. supermarkets and earn 1X.
+Receive up to $10 in Uber Cash each month and up to $10 in dining statement credits each month
+at participating partners; enrolment is required for both. Annual fee $325.""",
+        "expect": {"mcc": True, "exclusions": True, "statement_credits": True},
     },
     {
         "id": "spend-elsewhere",
-        "name": "HSBC Revolution + Everyday Global",
-        "stresses": "Rate depends on spending on a DIFFERENT product, and the cap is in points not dollars",
-        "track": "miles",
-        "terms": """HSBC Revolution Card. Earn 10X Reward points (4 miles per S$1) on online, dining and
-entertainment spend. Bonus points are capped at 9,000 Reward points per calendar month.
-Cardmembers who also hold an HSBC Everyday Global Account and make at least S$2,000 of
-eligible spend on that account in the same month earn an additional 1X Reward point per S$1.
-All other eligible spend earns 1X Reward point per S$1, with no cap.
-Annual fee waived permanently. Minimum annual income S$30,000.""",
-        "expect": {"conditions": {"spend_elsewhere", "banking_relationship"}, "reward_cap": True},
+        "name": "Bank of America Premium Rewards",
+        "stresses": "A relationship tier multiplies every rate, and credits are separate from earning",
+        "track": "points",
+        "terms": """Bank of America Premium Rewards. Earn 2 points per dollar on travel and dining purchases
+and 1.5 points per dollar on all other purchases, with no cap.
+Preferred Rewards members earn 25%, 50% or 75% more points on every purchase,
+based on combined qualifying balances held with Bank of America and Merrill.
+Receive up to $100 in airline incidental statement credits annually and
+up to $100 in Global Entry or TSA PreCheck credit every four years.
+Annual fee $95.""",
+        "expect": {"multiplier": True, "statement_credits": True},
     },
 ]
