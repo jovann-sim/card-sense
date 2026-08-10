@@ -44,6 +44,25 @@ needs the Plaid Link UI. It refuses to run outside sandbox.
 - The cards page exposes a Plaid credit-account selector for the cases that do
   not auto-link uniquely.
 
+## Real-time
+
+`POST /api/v1/plaid/webhook` handles `SYNC_UPDATES_AVAILABLE` and runs the same
+cursor-based sync as the manual endpoint, so there is one code path whether the
+pull was manual, scheduled or pushed. Register the URL when creating the Link
+token; in sandbox, trigger one with `/sandbox/item/fire_webhook`.
+
+"Immediately" means when the bank posts the transaction — minutes to a day
+after the card is used, because that is when Plaid learns of it. Detecting the
+moment of purchase is the extension's job; it sees the checkout page before the
+transaction exists anywhere.
+
+## Stress coverage
+
+`tests/test_ingestion_stress.py` — 26 cases covering empty and malformed
+payloads, categories arriving as strings or null, amounts as strings, unknown
+Plaid categories, refunds and signs, pending transactions, a 5,000-row feed,
+repeat normalisation of the same transaction, and webhook edge cases.
+
 ## Known gaps, in priority order
 
 **1. Some sandbox spend lands in "Uncategorised".** Mostly Plaid's
