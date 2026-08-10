@@ -116,10 +116,10 @@ cd backend && source .venv/bin/activate && uvicorn app.main:app --reload --port 
 ```
 
 ```bash
-cd CardSenseFrontend/web && npm run dev
+cd frontend/web && npm run dev
 ```
 
-The frontend needs `CardSenseFrontend/web/.env.local`:
+The frontend needs `frontend/web/.env.local`:
 
 ```
 CARDSENSE_API_URL=http://localhost:8080
@@ -267,6 +267,10 @@ Still open:
 
 - What should the Singapore reward valuations actually be? KrisFlyer, DBS
   Points, UNI$ and Membership Rewards are the ones that matter.
-- The frontend exists in two repos (`hcy-05/CardSense` and this one). This
-  branch changes the copy in `CardSenseFrontend/`. Worth consolidating before
-  they diverge further.
+- **The frontend build requires the backend to be running.** `lib/api.ts`
+  fetches the snapshot during prerendering, so `npm run build` fails with a
+  prerender error on `/_not-found` if port 8080 is down. Fine locally; it will
+  bite when deploying to Cloud Run, where the build step has no backend. Either
+  mark those pages dynamic or let the fetch fall back at build time.
+- The frontend also exists in `hcy-05/CardSense`. That copy is now well behind;
+  treat this repo as canonical and archive the other.
