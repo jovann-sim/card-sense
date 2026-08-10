@@ -14,6 +14,11 @@ class StrategyAgent:
     def run(self, transactions, wallet, rules, goal=None):
         grouped = defaultdict(list)
         for tx in transactions:
+            # A credit card bill payment or a transfer between your own
+            # accounts is money moving, not money spent. Ingestion flags them;
+            # counting them here would inflate every figure on the dashboard.
+            if tx.get("isPurchase") is False:
+                continue
             grouped[tx.get("category", "uncategorized")].append(tx)
 
         categories, total_captured, total_optimal, degraded = [], 0.0, 0.0, []

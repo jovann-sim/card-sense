@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     local_store_path: str = ".localstore.json"
 
     @property
+    def use_plaid(self) -> bool:
+        """Plaid is switched on by having credentials, not by the storage flag.
+
+        Same reasoning as Gemini: which bank feed you use and where you persist
+        are unrelated concerns. Coupling them meant you could not pull a sandbox
+        transaction without also standing up Firestore.
+        """
+        return bool(self.plaid_client_id and self.plaid_secret)
+
+    @property
     def use_gemini(self) -> bool:
         if self.gemini_enabled is not None:
             return self.gemini_enabled
@@ -49,11 +59,9 @@ class Settings(BaseSettings):
     def real_mode_errors(self) -> list[str]:
         if self.demo_mode:
             return []
-        required = {
-            "GOOGLE_CLOUD_PROJECT": self.google_cloud_project,
-            "PLAID_CLIENT_ID": self.plaid_client_id,
-            "PLAID_SECRET": self.plaid_secret,
-        }
+        # Only Firestore is genuinely required to leave demo mode. Plaid and
+        # Gemini gate themselves on their own credentials.
+        required = {"GOOGLE_CLOUD_PROJECT": self.google_cloud_project}
         return [f"{key} is required when DEMO_MODE=false" for key, value in required.items() if not value]
 
 
