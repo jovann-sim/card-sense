@@ -11,12 +11,12 @@
 const DISPLAY_TZ = "America/New_York";
 
 /**
- * Singapore dollars are the base currency. A card whose own terms are
- * denominated elsewhere keeps its currency and is labelled — see moneyIn —
- * rather than being converted at a rate nobody chose.
+ * US dollars are the base currency. A card whose own terms are denominated
+ * elsewhere keeps its currency and is labelled — see moneyIn — rather than
+ * being converted at a rate nobody chose.
  */
-export const BASE_CURRENCY = "SGD";
-const LOCALE = "en-SG";
+export const BASE_CURRENCY = "USD";
+const LOCALE = "en-US";
 
 const base = new Intl.NumberFormat(LOCALE, {
   style: "currency",

@@ -42,10 +42,32 @@ def transaction_totals(transactions) -> dict[str, float]:
     ]
     spend = sum(amount for amount in amounts if amount > 0)
     refunds = -sum(amount for amount in amounts if amount < 0)
+
+    def total(rows) -> float:
+        return round(sum(float(row.get("amount") or 0) for row in rows), 2)
+
+    eligible = [t for t in transactions if is_eligible_purchase(t)]
+    excluded = [t for t in transactions if t.get("isPurchase") is False]
+    uncategorised = [t for t in eligible if t.get("category") in (None, "Uncategorised", "uncategorized")]
+    redirectable = [t for t in eligible if t.get("isRedirectable")]
+
     return {
         "spend": round(spend, 2),
         "refunds": round(refunds, 2),
         "netSpend": round(spend - refunds, 2),
+        # What was left out, and why. A user whose dashboard shows less than
+        # their statement is owed an explanation rather than a smaller number.
+        "excludedSpend": total(excluded),
+        "excludedCount": len(excluded),
+        # Purchases with no category, so no card rule can claim them. Left out
+        # of the comparison rather than quietly earning the base rate, which
+        # would flatter every card equally.
+        "uncategorisedSpend": total(uncategorised),
+        "uncategorisedCount": len(uncategorised),
+        # Bills that earn nothing because the biller takes no cards. A payment
+        # service could route them for a fee; the optimiser will weigh that.
+        "redirectableSpend": total(redirectable),
+        "redirectableCount": len(redirectable),
     }
 
 

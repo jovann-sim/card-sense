@@ -2762,3 +2762,54 @@ body {
   font-size: 0.75rem;
   color: var(--slate);
 }
+
+/* ------------------------------------------------ excluded from figures --- */
+
+/* The dashboard shows less than a bank statement. This says why, in the same
+   breath as the number, rather than leaving the user to wonder. */
+.excluded {
+  margin-top: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  background: var(--paper);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+}
+
+.excluded__label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--slate);
+  margin-bottom: 0.875rem;
+}
+
+.excluded__items {
+  list-style: none;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.excluded__item {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
+  gap: 0.25rem 1rem;
+  align-items: baseline;
+  font-size: 0.8125rem;
+  color: var(--slate);
+}
+
+@media (max-width: 34rem) {
+  .excluded__item { grid-template-columns: minmax(0, 1fr); }
+}
+
+.excluded__value {
+  font-size: 1rem;
+  color: var(--graphite);
+  font-variant-numeric: tabular-nums;
+}
+
+.excluded__item[data-weight="high"] .excluded__value { color: var(--ember); }
+.excluded__item[data-kind="opportunity"] .excluded__value { color: var(--brass-deep); }
+
+.excluded__what { max-width: 62ch; }

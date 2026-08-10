@@ -1,3 +1,4 @@
+import pytest
 from app.agents.strategy import StrategyAgent
 
 
@@ -29,7 +30,10 @@ def test_strategy_respects_cap_and_detects_ties():
 def test_goal_projection_has_frontend_fields():
     goal = {"track": "points", "target": 1000, "unitLabel": "points", "current": 0, "deadline": None, "purpose": "trip"}
     out = StrategyAgent().goal_projection(goal, 10)
-    assert out["pacePerMonth"] == 1000
+    # Pace is captured value divided by what one unit is worth, so derive the
+    # expectation rather than pinning it to a valuation that will change.
+    from app.valuations import VALUATIONS
+    assert out["pacePerMonth"] == pytest.approx(round(10 / VALUATIONS["points"], 2))
     assert out["projectedAt"] is not None
 
 
