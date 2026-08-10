@@ -1,6 +1,6 @@
 from app.orchestrator import Orchestrator
 from app.store import Store
-from app.models import GoalIn, PlannedItemIn, Snapshot
+from app.models import AdviceResolveIn, GoalIn, PlannedItemIn, Snapshot
 from app import main
 
 
@@ -89,6 +89,65 @@ def test_goal_save_skips_advisory_model_call(monkeypatch):
 
     assert snapshot["goal"]["track"] == "miles"
     assert snapshot["goal"]["target"] == 60_000
+    assert store.get_subcollection(main.UID, "agent_runs") == []
+    assert store.get_subcollection(main.UID, "strategy_runs") == []
+
+
+def test_track_record_tolerates_non_numeric_model_values():
+    orchestrator = Orchestrator(Store())
+    advice = [
+        {
+            "id": "bad-prediction",
+            "outcome": "dismissed",
+            "predicted": "Inaccurate or missing financial projections",
+            "impact": "not a number",
+        },
+        {"id": "bad-actual", "outcome": "acted", "predicted": "12.5", "actual": None},
+    ]
+
+    record = orchestrator._track_record(advice)
+
+    assert record["earned"] == 0
+    assert record["missed"] == 0
+    assert record["records"][0]["predicted"] == 0
+    assert record["records"][1]["predicted"] == 12.5
+    assert record["records"][1]["actual"] == 0
+    assert orchestrator._recommendation(advice[0])["impact"] == 0
+
+
+def test_advice_resolution_uses_targeted_snapshot_projection(monkeypatch):
+    store = Store()
+    orchestrator = Orchestrator(store)
+    advice = {
+        "id": "recommendation",
+        "outcome": "open",
+        "headline": "Use the better card",
+        "urgency": "this-week",
+        "card": None,
+        "impact": 8,
+        "impactWindow": "per period",
+        "predicted": 8,
+        "window": "per period",
+        "body": "Save more.",
+        "trace": [],
+        "pushedAt": "2026-08-10T00:00:00+00:00",
+    }
+    store.set_subdoc(main.UID, "advice", advice["id"], advice)
+    snapshot = orchestrator.empty_snapshot(main.UID)
+    snapshot["recommendations"] = [orchestrator._recommendation(advice)]
+    snapshot["trackRecord"] = orchestrator._track_record([advice])
+    store.set_snapshot(main.UID, snapshot)
+    monkeypatch.setattr(main, "store", store)
+    monkeypatch.setattr(main, "orch", orchestrator)
+
+    resolved = main.resolve_advice(
+        advice["id"],
+        AdviceResolveIn(outcome="dismissed"),
+    )
+
+    assert resolved["recommendations"] == []
+    assert resolved["trackRecord"]["missed"] == 8
+    assert resolved["trackRecord"]["records"][0]["outcome"] == "dismissed"
     assert store.get_subcollection(main.UID, "agent_runs") == []
     assert store.get_subcollection(main.UID, "strategy_runs") == []
 

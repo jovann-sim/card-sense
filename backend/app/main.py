@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import csv
 import io
 import re
@@ -94,6 +94,19 @@ def validate_runtime_configuration():
             ) from exc
 
 
+def _firestore_safe_plaid_value(value):
+    """Convert Plaid SDK values that Firestore cannot encode recursively."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _firestore_safe_plaid_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_firestore_safe_plaid_value(item) for item in value]
+    return value
+
+
 def _normalise_plaid_transaction(tx: dict) -> dict:
     pfc = tx.get("personal_finance_category") or {}
     if isinstance(pfc, dict):
@@ -105,7 +118,7 @@ def _normalise_plaid_transaction(tx: dict) -> dict:
         source_category = "uncategorized"
         detailed_category = None
 
-    return {
+    return _firestore_safe_plaid_value({
         "id": tx.get("transaction_id"),
         "source": "plaid",
         "accountId": tx.get("account_id"),
@@ -123,7 +136,7 @@ def _normalise_plaid_transaction(tx: dict) -> dict:
         "location": tx.get("location") or {},
         "rawPlaid": tx,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
-    }
+    })
 
 
 def _rebuild_ingestion_from_store(uid: str) -> list[dict]:
@@ -241,9 +254,15 @@ def resolve_advice(advice_id: str, body: AdviceResolveIn):
     advice = store.get_subdoc(UID, "advice", advice_id)
     if not advice:
         raise HTTPException(404, "Advice not found")
-    store.set_subdoc(UID, "advice", advice_id, {"outcome": body.outcome, "resolvedAt": datetime.now(timezone.utc).isoformat()})
-    _, snap = orch.run(UID, "Recalculate after advice resolution")
-    return snap
+    resolution = {
+        "outcome": body.outcome,
+        "resolvedAt": None if body.outcome == "open" else datetime.now(timezone.utc).isoformat(),
+    }
+    store.set_subdoc(UID, "advice", advice_id, resolution)
+    return orch.project_advice_resolution(
+        UID,
+        {**advice, **resolution, "id": advice_id},
+    )
 
 
 def _card_id(name: str, network: str) -> str:
@@ -472,6 +491,8 @@ def plaid_sync(body: SyncIn):
         client = get_plaid_client()
         totals = {"added": 0, "modified": 0, "removed": 0}
         cursors = []
+        upserts: list[tuple[str, str, dict]] = []
+        deletes: list[tuple[str, str]] = []
 
         for item in items:
             current_cursor = body.cursor if body.cursor is not None else item.get("cursor")
@@ -490,41 +511,47 @@ def plaid_sync(body: SyncIn):
                     tx_id = tx.get("transaction_id")
                     if not tx_id:
                         continue
-                    store.set_subdoc(uid, "transactions", tx_id, _normalise_plaid_transaction(tx))
+                    upserts.append(("transactions", tx_id, _normalise_plaid_transaction(tx)))
                     item_added += 1
 
                 for tx in data.get("modified", []):
                     tx_id = tx.get("transaction_id")
                     if not tx_id:
                         continue
-                    store.set_subdoc(uid, "transactions", tx_id, _normalise_plaid_transaction(tx))
+                    upserts.append(("transactions", tx_id, _normalise_plaid_transaction(tx)))
                     item_modified += 1
 
                 for tx in data.get("removed", []):
                     tx_id = tx.get("transaction_id")
                     if tx_id:
-                        store.delete_subdoc(uid, "transactions", tx_id)
+                        deletes.append(("transactions", tx_id))
                         item_removed += 1
 
                 current_cursor = data.get("next_cursor") or current_cursor
                 has_more = bool(data.get("has_more", False))
 
-            store.set_subdoc(
-                uid,
+            upserts.append((
                 "plaid_items",
                 item["id"],
                 {
                     "cursor": current_cursor,
                     "lastSyncedAt": datetime.now(timezone.utc).isoformat(),
                 },
-            )
+            ))
             cursors.append({"itemId": item["id"], "cursor": current_cursor})
             totals["added"] += item_added
             totals["modified"] += item_modified
             totals["removed"] += item_removed
 
+        store.apply_subdoc_changes(uid, upserts=upserts, deletes=deletes)
         transactions = _rebuild_ingestion_from_store(uid)
-        run_id, snap = orch.run(uid, "Analyse newly synced Plaid transactions")
+        # Plaid connection should not wait for a Gemini advisory call. Existing
+        # advice remains valid while deterministic totals and strategy refresh.
+        run_id, snap = orch.run(
+            uid,
+            "Analyse newly synced Plaid transactions",
+            refresh_advice=False,
+        )
         logger.info("plaid_sync uid=%s duration_ms=%d added=%d modified=%d removed=%d", uid, round((perf_counter() - started) * 1000), totals["added"], totals["modified"], totals["removed"])
 
         return {

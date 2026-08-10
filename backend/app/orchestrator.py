@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from math import isfinite
 import uuid
 from time import perf_counter
 
@@ -20,6 +21,15 @@ AGENTS = [
     ("card-intelligence", "Card intelligence"), ("strategy", "Simulation & strategy"),
     ("advisory", "Advisory"),
 ]
+
+
+def _numeric_advice_value(value) -> float:
+    """Treat untrusted model/legacy advice values as zero unless truly numeric."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if isfinite(number) else 0.0
 
 
 def project_catalog(store, uid, wallet):
@@ -89,6 +99,7 @@ class Orchestrator:
             stage_started = perf_counter()
             advice = self.advisory.run(strategy, forecast, wallet)
             for item in advice:
+                item["impact"] = _numeric_advice_value(item.get("impact"))
                 item.setdefault("outcome", "open")
                 item.setdefault("pushedAt", self._now())
                 item.setdefault("predicted", item["impact"])
@@ -155,6 +166,33 @@ class Orchestrator:
         self.store.set_snapshot(uid, projected)
         return projected
 
+    def project_advice_resolution(self, uid, advice):
+        """Patch recommendation and track-record state without rerunning agents."""
+        snapshot = self.store.get_snapshot(uid) or self.empty_snapshot(uid)
+        advice_id = advice["id"]
+        recommendations = [
+            item for item in snapshot.get("recommendations", [])
+            if item.get("id") != advice_id
+        ]
+        if advice.get("outcome") == "open":
+            recommendations.append(self._recommendation(advice))
+
+        records = [
+            item for item in snapshot.get("trackRecord", {}).get("records", [])
+            if item.get("id") != advice_id
+        ]
+        records.append({
+            key: value for key, value in advice.items()
+            if key in {"id", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}
+        })
+
+        snapshot["generatedAt"] = self._now()
+        snapshot["recommendations"] = recommendations
+        snapshot["trackRecord"] = self._track_record(records)
+        projected = Snapshot.model_validate(snapshot).model_dump(mode="json")
+        self.store.set_snapshot(uid, projected)
+        return projected
+
     def project(self, uid, run_id):
         now = self._now()
         transactions = self.store.get_subcollection(uid, "transactions")
@@ -194,9 +232,18 @@ class Orchestrator:
 
     def _track_record(self, advice):
         acted = [a for a in advice if a.get("outcome") == "acted"]
-        return {"taken": len(acted), "offered": len(advice), "earned": round(sum(float(a.get("actual", 0)) for a in acted), 2), "missed": round(sum(float(a.get("predicted", 0)) for a in advice if a.get("outcome") in {"dismissed", "expired"}), 2), "accuracyNote": "Actual earnings are recorded after recommendation windows close.", "records": [{key: value for key, value in item.items() if key in {"id", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}} for item in advice]}
+        records = []
+        for item in advice:
+            record = {key: value for key, value in item.items() if key in {"id", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}}
+            record["predicted"] = _numeric_advice_value(item.get("predicted"))
+            if "actual" in record:
+                record["actual"] = _numeric_advice_value(record["actual"])
+            records.append(record)
+        return {"taken": len(acted), "offered": len(advice), "earned": round(sum(_numeric_advice_value(a.get("actual")) for a in acted), 2), "missed": round(sum(_numeric_advice_value(a.get("predicted")) for a in advice if a.get("outcome") in {"dismissed", "expired"}), 2), "accuracyNote": "Actual earnings are recorded after recommendation windows close.", "records": records}
 
     def _recommendation(self, item):
-        return {key: value for key, value in item.items() if key in {"id", "urgency", "headline", "card", "tiedWith", "impact", "impactWindow", "deadline", "body", "trace"}}
+        recommendation = {key: value for key, value in item.items() if key in {"id", "urgency", "headline", "card", "tiedWith", "impact", "impactWindow", "deadline", "body", "trace"}}
+        recommendation["impact"] = _numeric_advice_value(item.get("impact"))
+        return recommendation
 
     def _now(self): return datetime.now(timezone.utc).isoformat()
