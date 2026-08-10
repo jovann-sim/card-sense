@@ -112,6 +112,54 @@ def _normalise_plaid_transaction(tx: dict) -> dict:
     return _firestore_safe_plaid_value(orch.ingestion.normalise_plaid(tx))
 
 
+def _store_plaid_accounts(uid: str, client, access_token: str, item_id: str) -> list[dict]:
+    """Persist the accounts behind a Plaid Item so cards can be linked to them."""
+    from plaid.model.accounts_get_request import AccountsGetRequest
+
+    accounts = client.accounts_get(AccountsGetRequest(access_token=access_token)).to_dict()["accounts"]
+    stored = []
+    for account in accounts:
+        record = _firestore_safe_plaid_value({
+            "id": account["account_id"],
+            "itemId": item_id,
+            "mask": account.get("mask"),
+            "name": account.get("name"),
+            "officialName": account.get("official_name"),
+            "type": str(account.get("type") or ""),
+            "subtype": str(account.get("subtype") or ""),
+        })
+        store.set_subdoc(uid, "plaid_accounts", account["account_id"], record)
+        stored.append(record)
+    return stored
+
+
+def link_accounts_to_cards(uid: str) -> list[dict]:
+    """Attach Plaid accounts to wallet cards by matching the last four digits.
+
+    Without this, strategy cannot attribute any transaction to a card, so every
+    category reports zero captured reward and flags itself unverified. Plaid
+    exposes the account mask, which is exactly the last4 the user typed when
+    adding the card, so the common case needs no interaction at all.
+    """
+    accounts = store.get_subcollection(uid, "plaid_accounts")
+    linked = []
+    for card in store.get_wallet(uid):
+        if card.get("accountId"):
+            continue
+        match = next(
+            (a for a in accounts
+             if a.get("mask") and card.get("last4")
+             and str(a["mask"]) == str(card["last4"])
+             and "credit" in f"{a.get('type')} {a.get('subtype')}".lower()),
+            None,
+        )
+        if not match:
+            continue
+        store.set_subdoc(uid, "wallet", card["cardId"], {"accountId": match["id"]})
+        linked.append({"cardId": card["cardId"], "accountId": match["id"], "mask": match["mask"]})
+    return linked
+
+
 def _rebuild_ingestion_from_store(uid: str) -> list[dict]:
     """Transactions are authoritative in their subcollection; never mirror them on users/{uid}."""
     transactions = store.get_subcollection(uid, "transactions")
@@ -343,6 +391,34 @@ async def upload_terms(card_id: str, file: UploadFile = File(...)):
     return {"card": card_detail, "snapshot": snap}
 
 
+@app.post("/api/v1/cards/{card_id}/link-account", response_model=CardResponse)
+def link_card_account(card_id: str, body: dict):
+    """Attach a Plaid account to a card by hand when the mask does not match."""
+    card = store.get_subdoc(UID, "wallet", card_id)
+    if not card:
+        raise HTTPException(404, "Card not found")
+    account_id = (body or {}).get("accountId")
+    if not account_id:
+        raise HTTPException(400, "accountId is required")
+    if not store.get_subdoc(UID, "plaid_accounts", account_id):
+        raise HTTPException(404, "No such Plaid account for this user")
+
+    store.set_subdoc(UID, "wallet", card_id, {"accountId": account_id})
+    _, snap = orch.run(UID, "Recalculate after linking an account", refresh_advice=False)
+    return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
+
+
+@app.get("/api/v1/plaid/accounts")
+def plaid_accounts():
+    """Accounts we know about, and which card each is linked to."""
+    wallet = store.get_wallet(UID)
+    by_account = {c["accountId"]: c for c in wallet if c.get("accountId")}
+    return [
+        {**account, "linkedCard": (by_account.get(account["id"]) or {}).get("name")}
+        for account in store.get_subcollection(UID, "plaid_accounts")
+    ]
+
+
 @app.get("/api/v1/cards")
 def cards():
     return store.get_wallet(UID)
@@ -450,7 +526,9 @@ def plaid_sandbox_seed(body: LinkTokenIn):
         "institutionId": "ins_109508",
         "createdAt": datetime.now(timezone.utc).isoformat(),
     })
-    return {"ok": True, "itemId": item_id, "userId": uid,
+    accounts = _store_plaid_accounts(uid, client, exchanged["access_token"], item_id)
+    return {"ok": True, "itemId": item_id, "userId": uid, "accounts": len(accounts),
+            "linked": link_accounts_to_cards(uid),
             "next": "POST /api/v1/plaid/sync to pull transactions"}
 
 
@@ -561,6 +639,8 @@ def plaid_sync(body: SyncIn):
             totals["removed"] += item_removed
 
         store.apply_subdoc_changes(uid, upserts=upserts, deletes=deletes)
+        # A card added after the bank was connected still needs attaching.
+        link_accounts_to_cards(uid)
         transactions = _rebuild_ingestion_from_store(uid)
         # Plaid connection should not wait for a Gemini advisory call. Existing
         # advice remains valid while deterministic totals and strategy refresh.
