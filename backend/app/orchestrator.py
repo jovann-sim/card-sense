@@ -84,6 +84,16 @@ class Orchestrator:
         transactions = self.store.get_subcollection(uid, "transactions")
         planned = self.store.get_subcollection(uid, "planned")
         wallet = self.store.get_wallet(uid)
+
+        # Card intelligence runs first and for real: any card whose recheck
+        # date has passed is reread before the optimiser prices anything, so a
+        # rate change propagates without anyone noticing manually.
+        stage_started = perf_counter()
+        wallet, reread, card_notes = self._recheck_due(uid, wallet)
+        self._log(uid, run_id, "card-intelligence", "Card intelligence", "card_rules", ["wallet"],
+                  card_notes, round((perf_counter() - stage_started) * 1000),
+                  summary=f"Reread {reread} of {len(wallet)} cards." if reread else "No cards were due a recheck.")
+
         rules = {card["cardId"]: (self.store.get_global_doc("card_rules", card["cardId"]) or {}).get("rules", []) for card in wallet}
         summary = self._summary(transactions)
         stage_started = perf_counter()
@@ -117,8 +127,6 @@ class Orchestrator:
                 summary="Existing advice retained; deterministic state recalculated without a model call.",
             )
         self._log(uid, run_id, "ingestion", "Ingestion", "transactions", ["plaid_items", "mcc_map"])
-        card_notes = [c.get("parseNote") for c in wallet if c.get("parseStatus") != "parsed" and c.get("parseNote")]
-        self._log(uid, run_id, "card-intelligence", "Card intelligence", "card_rules", ["wallet"], card_notes)
         snapshot = self.project(uid, run_id)
         self.store.set_snapshot(uid, snapshot)
         self.store.set_user(uid, {"lastRunId": run_id, "lastRunAt": snapshot["generatedAt"]})
@@ -217,6 +225,49 @@ class Orchestrator:
         data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": {"spend": round(sum(float(t.get("amount", 0)) for t in transactions), 2), "captured": captured, "unclaimed": strategy["unclaimed"]}, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open"], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["strategy"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
+    def _recheck_due(self, uid, wallet):
+        """Reread the terms of any card whose recheck date has arrived.
+
+        Only cards with a stored terms link are touched: rates entered by hand
+        are the user's, and the agent must not overwrite them.
+        """
+        reread, notes, updated = 0, [], []
+        for card in wallet:
+            due = self.cardintel.due_for_recheck(card)
+            if not due or not card.get("termsUrl"):
+                updated.append(card)
+                if card.get("parseStatus") != "parsed" and card.get("parseNote"):
+                    notes.append(card["parseNote"])
+                continue
+
+            previous = self.store.get_global_doc("card_rules", card["cardId"])
+            parsed = self.cardintel.parse({**card, "rules": None}, previous)
+            reread += 1
+            refreshed = {
+                **card,
+                "rules": parsed.get("rules", []),
+                "characteristics": parsed.get("characteristics", {}),
+                "source": parsed["source"],
+                "recheckCadence": parsed.get("recheckCadence", "weekly"),
+                "nextRecheckAt": parsed.get("nextRecheckAt"),
+                "parseStatus": parsed.get("status", "failed"),
+                "parseNote": parsed.get("note"),
+                "parseConfidence": parsed.get("confidence", 0.0),
+                "failureReason": parsed.get("failureReason"),
+            }
+            self.store.set_global_doc("card_rules", card["cardId"], {
+                "rules": parsed.get("rules", []),
+                "characteristics": parsed.get("characteristics", {}),
+                "source": parsed["source"],
+                "status": refreshed["parseStatus"],
+                "confidence": refreshed["parseConfidence"],
+            })
+            self.store.set_subdoc(uid, "wallet", card["cardId"], refreshed)
+            if refreshed["parseStatus"] != "parsed" and refreshed.get("parseNote"):
+                notes.append(f"{card['name']}: {refreshed['parseNote']}")
+            updated.append(refreshed)
+        return updated, reread, notes
+
     def _summary(self, transactions):
         categories, monthly = {}, {}
         for tx in transactions:
@@ -228,7 +279,7 @@ class Orchestrator:
 
     def _log(self, uid, run_id, agent, label, writes, reads, degraded=None, duration_ms=0, summary=None):
         detail = "; ".join(degraded or []) or None
-        self.store.write_agent_run(uid, f"{run_id}-{agent}", {"id": f"{run_id}-{agent}", "runId": run_id, "agent": agent, "status": "degraded" if detail else "ok", "startedAt": self._now(), "durationMs": duration_ms, "summary": summary or f"{label} completed.", "detail": detail, "writes": writes, "reads": reads, "retryable": False})
+        self.store.write_agent_run(uid, f"{run_id}-{agent}", {"id": f"{run_id}-{agent}", "runId": run_id, "agent": agent, "status": "degraded" if detail else "ok", "startedAt": self._now(), "durationMs": duration_ms, "summary": summary or f"{label} completed.", "detail": detail, "writes": writes, "reads": reads, "retryable": agent == "card-intelligence" and bool(detail)})
 
     def _track_record(self, advice):
         acted = [a for a in advice if a.get("outcome") == "acted"]

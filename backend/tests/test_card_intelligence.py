@@ -398,3 +398,114 @@ def test_label_matching_still_works_without_codes():
     dining = {"categoryLabel": "Dining", "mccCodes": []}
     assert strategy._matches(dining, "Dining")
     assert not strategy._matches(dining, "Fuel")
+
+
+# -- two-pass consolidation -------------------------------------------------
+
+def test_a_condition_either_pass_found_survives_the_merge():
+    """Misses between runs are uncorrelated, so the union is the honest view."""
+    from app.agents.consolidate import consolidate
+    first = ExtractionResult(rules=[extracted(
+        conditions=[{"kind": "category_selection", "description": "Nominate one category.",
+                     "amount": None, "count": None, "cycleLabel": "no cap"}])], confidence=0.9)
+    second = ExtractionResult(rules=[extracted(
+        conditions=[{"kind": "banking_relationship", "description": "Requires a One Account.",
+                     "amount": None, "count": None, "cycleLabel": "no cap"}])], confidence=0.9)
+
+    kinds = {c.kind for c in consolidate([first, second]).rules[0].conditions}
+    assert kinds == {"category_selection", "banking_relationship"}
+
+
+def test_scope_is_unioned_across_passes():
+    from app.agents.consolidate import consolidate
+    first = ExtractionResult(rules=[extracted(mccCodes=["5812"], merchants=["Giant"])], confidence=0.9)
+    second = ExtractionResult(rules=[extracted(mccCodes=["5814"], merchants=["Cold Storage"])], confidence=0.9)
+    merged = consolidate([first, second]).rules[0]
+    assert set(merged.mccCodes) == {"5812", "5814"}
+    assert set(merged.merchants) == {"Giant", "Cold Storage"}
+
+
+def test_the_more_thorough_pass_is_the_base():
+    from app.agents.consolidate import consolidate
+    thin = ExtractionResult(rules=[extracted(categoryLabel="Dining")], confidence=0.9)
+    thorough = ExtractionResult(rules=[extracted(categoryLabel="Dining"),
+                                       extracted(categoryLabel="Everything else")], confidence=0.9)
+    assert len(consolidate([thin, thorough]).rules) == 2
+
+
+def test_a_rule_only_one_pass_saw_is_not_promoted():
+    """Uncorroborated rules stay out; merging must not invent coverage."""
+    from app.agents.consolidate import consolidate
+    first = ExtractionResult(rules=[extracted(categoryLabel="Dining")], confidence=0.9)
+    second = ExtractionResult(rules=[extracted(categoryLabel="Something Nobody Else Saw")], confidence=0.9)
+    labels = {r.categoryLabel for r in consolidate([first, second]).rules}
+    assert labels == {"Dining"}
+
+
+def test_a_card_that_is_only_benefits_still_parses():
+    """UOB One pays a fixed quarterly rebate and earns no percentage."""
+    extraction = ExtractionResult(rules=[], confidence=0.9, benefits=[
+        {"label": "Quarterly rebate", "kind": "statement_credit", "amount": 50,
+         "cycleLabel": "per quarter", "conditions": [
+             {"kind": "minimum_spend", "description": "Spend at least S$500 each month.",
+              "amount": 500, "count": None, "cycleLabel": "per month"},
+             {"kind": "transaction_count", "description": "At least 5 transactions each month.",
+              "amount": None, "count": 5, "cycleLabel": "per month"}]},
+    ])
+    result = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})
+    assert result["status"] == "parsed"
+    assert result["benefits"][0]["amount"] == 50
+
+
+def test_a_card_with_neither_rules_nor_benefits_still_fails():
+    extraction = ExtractionResult(rules=[], benefits=[], confidence=0.9)
+    result = CardIntelligenceAgent(FakeRuntime(extraction)).parse({"name": "C", "termsText": "..."})
+    assert result["status"] == "failed"
+    assert result["failureReason"] == "no_rules_found"
+
+
+# -- mcc backfill -----------------------------------------------------------
+
+def test_missing_codes_are_filled_from_the_curated_map():
+    from app.mcc import backfill
+    rules = [{"categoryLabel": "Dining", "mccCodes": []}]
+    filled, count = backfill(rules)
+    assert count == 1
+    assert "5812" in filled[0]["mccCodes"]
+    assert filled[0]["mccSource"] == "inferred"
+
+
+def test_codes_the_document_named_are_never_overwritten():
+    from app.mcc import backfill
+    rules = [{"categoryLabel": "Dining", "mccCodes": ["9999"]}]
+    filled, count = backfill(rules)
+    assert filled[0]["mccCodes"] == ["9999"]
+    assert count == 0
+
+
+def test_a_merchant_scoped_rule_gets_no_category_codes():
+    """Giving a three-shop rate category codes would let it match far too much."""
+    from app.mcc import backfill
+    rules = [{"categoryLabel": "Groceries", "mccCodes": [], "merchants": ["Cold Storage"]}]
+    filled, count = backfill(rules)
+    assert filled[0]["mccCodes"] == []
+    assert count == 0
+
+
+def test_the_base_rate_gets_no_codes():
+    from app.mcc import codes_for
+    assert codes_for("Everything else") == []
+    assert codes_for("All other spend") == []
+
+
+def test_a_benefits_only_pass_is_not_discarded_when_merging():
+    """UOB One earns no percentage; a pass that found only its rebate is real."""
+    from app.agents.consolidate import consolidate
+    benefits_only = ExtractionResult(rules=[], confidence=0.9, benefits=[
+        {"label": "Quarterly rebate", "kind": "statement_credit", "amount": 50,
+         "cycleLabel": "per quarter", "conditions": [
+             {"kind": "minimum_spend", "description": "Spend S$500 monthly.",
+              "amount": 500, "count": None, "cycleLabel": "per month"}]}])
+    empty = ExtractionResult(rules=[], benefits=[], confidence=0.0)
+    merged = consolidate([empty, benefits_only])
+    assert merged.benefits and merged.confidence == 0.9

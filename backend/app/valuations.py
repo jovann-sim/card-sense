@@ -26,7 +26,10 @@ REWARD_UNIT_VALUES: dict[str, tuple[float, str]] = {
     "membership rewards": (0.0095, "Placeholder: ~2 MR points per mile, so roughly half a mile's value. Confirm."),
     "thankyou points": (0.008, "Placeholder. Confirm against Citi transfer ratios."),
     "dbs points": (0.019, "Placeholder: 1 DBS point transfers to ~2 miles on most cards. Confirm."),
-    "uni$": (0.019, "Placeholder: 1 UNI$ transfers to ~2 miles. Confirm."),
+    # The divergence check caught this: a card quoting both "10 UNI$ per S$5"
+    # and "4 miles per S$1" priced 44% apart, which can only mean the UNI$
+    # figure was wrong. 1 UNI$ = 2 miles, so it must be twice a mile.
+    "uni$": (0.038, "Placeholder: 1 UNI$ transfers to 2 miles at ~1.9 SG cents each. Confirm."),
     "reward points": (0.0076, "Placeholder: ~2.5 HSBC points per mile. Confirm."),
     "ocbc$": (0.008, "Placeholder. Confirm against OCBC redemption tables."),
     "yuu points": (0.01, "Placeholder: 100 yuu Points redeem for about S$1 at partners. Confirm."),
