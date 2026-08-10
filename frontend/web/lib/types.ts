@@ -41,6 +41,14 @@ export interface Period {
 }
 
 export interface Totals {
+  /** Spending left out of the reward comparison, and why. */
+  excludedSpend?: number;
+  excludedCount?: number;
+  uncategorisedSpend?: number;
+  uncategorisedCount?: number;
+  /** Bills a payment service could route onto a card for a fee. */
+  redirectableSpend?: number;
+  redirectableCount?: number;
   /** Posted purchase outflows, excluding refunds and credits. */
   spend: number;
   /** Absolute value of posted refunds and credits. */

@@ -4,6 +4,7 @@ import { LeakList } from "@/components/LeakList";
 import { LedgerBar, LedgerLegend } from "@/components/LedgerBar";
 import { Recommendations } from "@/components/Recommendations";
 import { TrackPanel } from "@/components/TrackPanel";
+import { ExcludedStrip } from "@/components/ExcludedStrip";
 import { TrackRecordStrip } from "@/components/TrackRecordStrip";
 import { dayMonth, money } from "@/lib/format";
 import { getSnapshot } from "@/lib/api";
@@ -59,6 +60,8 @@ export default async function SpendingAnalytics() {
       </section>
 
       <div className="shell">
+        <ExcludedStrip totals={totals} />
+
         <TrackRecordStrip record={snapshot.trackRecord} />
 
         <section className="section split">
