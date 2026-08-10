@@ -108,35 +108,8 @@ def _firestore_safe_plaid_value(value):
 
 
 def _normalise_plaid_transaction(tx: dict) -> dict:
-    pfc = tx.get("personal_finance_category") or {}
-    if isinstance(pfc, dict):
-        source_category = pfc.get("primary") or "uncategorized"
-        category = PLAID_CATEGORY_MAP.get(source_category, "uncategorized")
-        detailed_category = pfc.get("detailed")
-    else:
-        category = "uncategorized"
-        source_category = "uncategorized"
-        detailed_category = None
-
-    return _firestore_safe_plaid_value({
-        "id": tx.get("transaction_id"),
-        "source": "plaid",
-        "accountId": tx.get("account_id"),
-        "date": tx.get("date") or tx.get("authorized_date"),
-        "merchant": tx.get("merchant_name") or tx.get("name") or "Unknown",
-        "amount": abs(float(tx.get("amount") or 0)),
-        "category": category,
-        "categorySource": source_category,
-        "categoryAmbiguous": category == "uncategorized",
-        "detailedCategory": detailed_category,
-        "description": tx.get("name") or "",
-        "pending": bool(tx.get("pending", False)),
-        "currency": tx.get("iso_currency_code") or tx.get("unofficial_currency_code"),
-        "paymentChannel": tx.get("payment_channel"),
-        "location": tx.get("location") or {},
-        "rawPlaid": tx,
-        "updatedAt": datetime.now(timezone.utc).isoformat(),
-    })
+    """Delegates to the ingestion agent, which owns the transaction shape."""
+    return _firestore_safe_plaid_value(orch.ingestion.normalise_plaid(tx))
 
 
 def _rebuild_ingestion_from_store(uid: str) -> list[dict]:
@@ -193,7 +166,7 @@ def health():
         "status": "ok",
         "demoMode": settings.demo_mode,
         "model": settings.finance_agent_model,
-        "plaidEnv": settings.plaid_env if not settings.demo_mode else "demo",
+        "plaidEnv": settings.plaid_env if settings.use_plaid else "not configured",
         "realModeErrors": settings.real_mode_errors(),
     }
 
@@ -413,7 +386,7 @@ def delete_card(wallet_or_card_id: str):
 
 @app.post("/api/v1/plaid/link-token")
 def plaid_link_token(body: LinkTokenIn):
-    if settings.demo_mode:
+    if not settings.use_plaid:
         return {"demo": True, "link_token": "demo-link-token"}
 
     try:
@@ -437,10 +410,54 @@ def plaid_link_token(body: LinkTokenIn):
         raise _plaid_error(exc)
 
 
+@app.post("/api/v1/plaid/sandbox/seed")
+def plaid_sandbox_seed(body: LinkTokenIn):
+    """Create a sandbox Item and exchange it in one call.
+
+    Plaid Link exists so a human can type bank credentials somewhere we never
+    see. In sandbox there are no real credentials, so this shortcut mints the
+    public token directly — which means ingestion can be built and tested
+    before any of the Link UI exists. Sandbox only, by construction.
+    """
+    if not settings.use_plaid:
+        raise HTTPException(400, "Plaid is not configured; set PLAID_CLIENT_ID and PLAID_SECRET.")
+    if (settings.plaid_env or "sandbox").lower() != "sandbox":
+        raise HTTPException(400, "This endpoint only exists for the sandbox environment.")
+
+    from plaid.model.products import Products
+    from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
+
+    uid = _uid(body.userId)
+    client = get_plaid_client()
+    try:
+        created = client.sandbox_public_token_create(SandboxPublicTokenCreateRequest(
+            institution_id="ins_109508",  # First Platypus Bank, the standard sandbox institution
+            initial_products=[Products("transactions")],
+        )).to_dict()
+        from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+
+        exchanged = client.item_public_token_exchange(
+            ItemPublicTokenExchangeRequest(public_token=created["public_token"])
+        ).to_dict()
+    except Exception as exc:
+        raise _plaid_error(exc)
+
+    item_id = exchanged["item_id"]
+    store.set_subdoc(uid, "plaid_items", item_id, {
+        "id": item_id,
+        "accessToken": exchanged["access_token"],
+        "cursor": None,
+        "institutionId": "ins_109508",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"ok": True, "itemId": item_id, "userId": uid,
+            "next": "POST /api/v1/plaid/sync to pull transactions"}
+
+
 @app.post("/api/v1/plaid/exchange-token")
 def plaid_exchange(body: ExchangeTokenIn):
-    if settings.demo_mode:
-        return {"ok": True, "demo": True, "message": "Demo mode: no Plaid token stored."}
+    if not settings.use_plaid:
+        return {"ok": True, "demo": True, "message": "Plaid is not configured; set PLAID_CLIENT_ID and PLAID_SECRET."}
 
     try:
         from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
@@ -475,8 +492,8 @@ def plaid_exchange(body: ExchangeTokenIn):
 @app.post("/api/v1/plaid/sync")
 def plaid_sync(body: SyncIn):
     started = perf_counter()
-    if settings.demo_mode:
-        return {"ok": True, "demo": True, "message": "Demo mode: use CSV ingestion or seeded transactions."}
+    if not settings.use_plaid:
+        return {"ok": True, "demo": True, "message": "Plaid is not configured; set PLAID_CLIENT_ID and PLAID_SECRET."}
 
     uid = _uid(body.userId)
     item_id = body.itemId
