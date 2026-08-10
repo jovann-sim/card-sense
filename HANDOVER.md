@@ -1,6 +1,6 @@
 # Card intelligence — handover
 
-Branch: `feat/card-intelligence` · 4 commits · 19 files
+Branch: `feat/card-intelligence` · 6 commits
 
 The card intelligence agent now reads a real terms document — a URL or a PDF —
 and returns reward rules the strategy agent can price without parsing prose.
@@ -30,6 +30,7 @@ over the string `"4% cash back"`.
 | `8ad0f0b` | Add-a-card calls the agent instead of posting hardcoded rules |
 | `07ba8a0` | Per-programme valuations, Singapore dollars as base currency |
 | `565d691` | Conditional rewards: scope, currency choice, MCC codes |
+| `1ab28f1` | Eval corpus of 10 hard cards, two-pass extraction, benefits, MCC backfill |
 
 ### The important part for you
 
@@ -138,7 +139,7 @@ start clean. It is gitignored, and Firestore takes over when `DEMO_MODE=false`.
 cd backend && source .venv/bin/activate && python -m pytest tests/ -q
 ```
 
-46 tests, no network and no Gemini — a fake runtime stands in.
+57 tests, no network and no Gemini — a fake runtime stands in.
 
 ### Through the UI
 
@@ -184,11 +185,12 @@ guessing, but in practice **PDFs are the reliable path**. Fixing this properly
 needs a headless browser in the fetch step — a real dependency, and a separate
 piece of work.
 
-**MCC extraction is inconsistent between runs.** The same UOB document returned
-31 codes in one run and none in another, at temperature 0. When codes are
-missing, matching falls back to label comparison. This is the weakest link for
-simulation accuracy. A validation pass that fills codes from a curated map when
-the model omits them would fix it.
+**Extraction is not deterministic.** The same document read twice does not
+produce the same answer, even at temperature 0. Two passes are merged to
+recover most of it (see 5b), but a third pass would recover a little more, and
+some structures still only surface sometimes. Treat any single reading as
+provisional — which is exactly why the interface shows the user what was read
+before it drives anything.
 
 **The valuations are placeholders.** Every figure in `app/valuations.py` carries
 its own reasoning string saying so, and there is a test that fails if anyone
