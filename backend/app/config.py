@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     google_cloud_location: str = "global"
     finance_agent_model: str = "gemini-2.5-flash"
     firestore_database: str = "(default)"
+    snapshot_cache_ttl_seconds: float = 10.0
     plaid_client_id: str | None = None
     plaid_secret: str | None = None
     plaid_env: str = "sandbox"

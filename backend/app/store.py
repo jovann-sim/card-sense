@@ -4,6 +4,7 @@ import logging
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from .config import settings
 
@@ -18,6 +19,7 @@ class Store:
         """
         self.db = None
         self.memory: dict[str, Any] = {"users": {}, "card_rules": {}, "mcc_map": {}}
+        self._snapshot_cache: dict[str, tuple[float, dict]] = {}
         self._persist_enabled = persist
         self._load()
 
@@ -60,6 +62,7 @@ class Store:
     def reset(self):
         """Drop everything. Used by tests and by starting a demo from scratch."""
         self.memory = {"users": {}, "card_rules": {}, "mcc_map": {}}
+        self._snapshot_cache.clear()
         self._persist()
 
     def _user_ref(self, uid: str):
@@ -137,11 +140,68 @@ class Store:
         self.memory["users"][uid][collection] = [r for r in rows if r.get("id") != doc_id]
         self._persist()
 
+    def apply_subdoc_changes(
+        self,
+        uid: str,
+        *,
+        upserts: list[tuple[str, str, dict]],
+        deletes: list[tuple[str, str]],
+    ):
+        """Apply a group of user subcollection changes with few Firestore round trips."""
+        if self.db:
+            operations = [
+                ("set", collection, doc_id, data)
+                for collection, doc_id, data in upserts
+            ] + [
+                ("delete", collection, doc_id, None)
+                for collection, doc_id in deletes
+            ]
+            # Stay below Firestore's 500-write batch limit.
+            for offset in range(0, len(operations), 450):
+                batch = self.db.batch()
+                for operation, collection, doc_id, data in operations[offset:offset + 450]:
+                    ref = self._user_ref(uid).collection(collection).document(doc_id)
+                    if operation == "set":
+                        batch.set(ref, data, merge=True)
+                    else:
+                        batch.delete(ref)
+                batch.commit()
+            return
+
+        user = self.memory["users"].setdefault(uid, {})
+        for collection, doc_id, data in upserts:
+            rows = user.setdefault(collection, [])
+            row = next((item for item in rows if item.get("id") == doc_id), None)
+            if row is None:
+                rows.append(deepcopy({"id": doc_id, **data}))
+            else:
+                row.update(deepcopy(data))
+        for collection, doc_id in deletes:
+            rows = user.setdefault(collection, [])
+            user[collection] = [item for item in rows if item.get("id") != doc_id]
+        self._persist()
+
     def set_snapshot(self, uid: str, snapshot: dict):
         self.set_subdoc(uid, "snapshots", "current", snapshot)
+        self._snapshot_cache[uid] = (
+            monotonic() + settings.snapshot_cache_ttl_seconds,
+            deepcopy(snapshot),
+        )
 
     def get_snapshot(self, uid: str) -> dict | None:
-        return self.get_subdoc(uid, "snapshots", "current")
+        cached = self._snapshot_cache.get(uid)
+        if cached and cached[0] > monotonic():
+            return deepcopy(cached[1])
+
+        snapshot = self.get_subdoc(uid, "snapshots", "current")
+        if snapshot is not None:
+            self._snapshot_cache[uid] = (
+                monotonic() + settings.snapshot_cache_ttl_seconds,
+                deepcopy(snapshot),
+            )
+        else:
+            self._snapshot_cache.pop(uid, None)
+        return snapshot
 
     def write_agent_run(self, uid: str, run_id: str, data: dict):
         self.set_subdoc(uid, "agent_runs", run_id, data)

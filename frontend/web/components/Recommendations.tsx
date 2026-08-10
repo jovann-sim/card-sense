@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { AgentId, Recommendation } from "@/lib/types";
+import type { AgentId, Recommendation, Snapshot } from "@/lib/types";
 import { dayMonth, daysUntil, money, moneyWhole } from "@/lib/format";
 import { api } from "@/lib/client-api";
 
@@ -31,15 +31,38 @@ export function Recommendations({
   now: string;
 }) {
   const [resolved, setResolved] = useState<Record<string, Resolution>>({});
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const router = useRouter();
 
-  async function resolve(id: string, outcome: "acted" | "dismissed") {
+  async function resolve(id: string, outcome: "open" | "acted" | "dismissed") {
+    const previous = resolved[id];
+    setResolved((current) => {
+      const next = { ...current };
+      if (outcome === "open") delete next[id];
+      else next[id] = outcome === "acted" ? "done" : "dismissed";
+      return next;
+    });
+    setPending((current) => ({ ...current, [id]: true }));
+    setErrors((current) => ({ ...current, [id]: "" }));
     try {
-      await api(`/api/v1/advice/${id}/resolve`, { method: "POST", body: JSON.stringify({ outcome }) });
-      setResolved((current) => ({ ...current, [id]: outcome === "acted" ? "done" : "dismissed" }));
+      await api<Snapshot>(`/api/v1/advice/${encodeURIComponent(id)}/resolve`, {
+        method: "POST", body: JSON.stringify({ outcome }),
+      });
       router.refresh();
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to update recommendation.");
+      setResolved((current) => {
+        const next = { ...current };
+        if (previous) next[id] = previous;
+        else delete next[id];
+        return next;
+      });
+      setErrors((current) => ({
+        ...current,
+        [id]: error instanceof Error ? error.message : "Unable to update recommendation.",
+      }));
+    } finally {
+      setPending((current) => ({ ...current, [id]: false }));
     }
   }
 
@@ -68,16 +91,12 @@ export function Recommendations({
               <button
                 type="button"
                 className="rec__undo"
-                onClick={() =>
-                  setResolved((r) => {
-                    const next = { ...r };
-                    delete next[rec.id];
-                    return next;
-                  })
-                }
+                disabled={pending[rec.id]}
+                onClick={() => resolve(rec.id, "open")}
               >
-                Undo
+                {pending[rec.id] ? "Saving…" : "Undo"}
               </button>
+              {errors[rec.id] && <p className="dialog__fine" role="alert">{errors[rec.id]}</p>}
             </article>
           );
         }
@@ -126,18 +145,22 @@ export function Recommendations({
               <button
                 type="button"
                 className="btn btn--small btn--quiet"
+                disabled={pending[rec.id]}
                 onClick={() => resolve(rec.id, "acted")}
               >
-                Mark as done
+                {pending[rec.id] ? "Saving…" : "Mark as done"}
               </button>
               <button
                 type="button"
                 className="rec__dismiss"
+                disabled={pending[rec.id]}
                 onClick={() => resolve(rec.id, "dismissed")}
               >
                 Not for me
               </button>
             </div>
+
+            {errors[rec.id] && <p className="dialog__fine" role="alert">{errors[rec.id]}</p>}
 
             <details className="trace">
               <summary className="trace__toggle">

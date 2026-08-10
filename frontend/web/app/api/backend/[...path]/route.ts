@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server";
+import { revalidateTag } from "next/cache";
+import { SNAPSHOT_CACHE_TAG } from "@/lib/cache-tags";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -25,7 +27,13 @@ async function forward(request: NextRequest, { params }: Context) {
         : await request.arrayBuffer(),
       cache: "no-store",
     });
-    return new Response(await upstream.arrayBuffer(), {
+    const responseBody = await upstream.arrayBuffer();
+    if (upstream.ok && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      // Route handlers cannot use updateTag, so expire immediately to preserve
+      // read-after-write behavior for the router.refresh() that follows.
+      revalidateTag(SNAPSHOT_CACHE_TAG, { expire: 0 });
+    }
+    return new Response(responseBody, {
       status: upstream.status,
       headers: { "Content-Type": upstream.headers.get("content-type") ?? "application/json" },
     });

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { CardDetail, CatalogCard, ParseStatus } from "@/lib/types";
+import type { CardDetail, CatalogCard, ParseStatus, Snapshot } from "@/lib/types";
 import { dayMonth, money, moneyIn } from "@/lib/format";
 import { api } from "@/lib/client-api";
 import { AddCardFlow } from "./AddCardFlow";
@@ -16,12 +16,14 @@ const PARSE_LABEL: Record<ParseStatus, string> = {
 function Wallet({
   wallet,
   rechecking,
+  removing,
   onRecheck,
   onManual,
   onRemove,
 }: {
   wallet: CardDetail[];
   rechecking: string | null;
+  removing: boolean;
   onRecheck: (last4: string) => void;
   onManual: (card: CardDetail) => void;
   onRemove: (card: CardDetail) => void;
@@ -45,8 +47,8 @@ function Wallet({
 
           {card.rules.length > 0 ? (
             <ul className="rules">
-              {card.rules.map((rule) => (
-                <li key={rule.categoryLabel} className="rules__row">
+              {card.rules.map((rule, index) => (
+                <li key={rule.id ?? `legacy-rule-${index}`} className="rules__row">
                   <span className="rules__cat">{rule.categoryLabel}</span>
                   <span className="rules__rate num">{rule.rate}</span>
                   <span className="rules__cap num">
@@ -103,6 +105,7 @@ function Wallet({
             type="button"
             className="btn btn--small btn--quiet"
             onClick={() => onRemove(card)}
+            disabled={removing}
           >
             Remove card
           </button>
@@ -275,6 +278,7 @@ export function CardsView({
   const [adding, setAdding] = useState(false);
   const [manualFor, setManualFor] = useState<CardDetail | null>(null);
   const [rechecking, setRechecking] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const router = useRouter();
 
@@ -346,12 +350,23 @@ export function CardsView({
     }
     if (!window.confirm(`Remove ${card.name} ••${card.last4} from your wallet?`)) return;
     setRequestError(null);
+    const previous = wallet;
+    setRemovingId(walletId);
+    setWallet((list) =>
+      list.filter((item) => (item.walletId ?? item.id ?? item.cardId) !== walletId),
+    );
     try {
-      await api(`/api/v1/cards/${encodeURIComponent(walletId)}`, { method: "DELETE" });
-      setWallet((list) => list.filter((item) => (item.walletId ?? item.id ?? item.cardId) !== walletId));
+      const snapshot = await api<Snapshot>(
+        `/api/v1/cards/${encodeURIComponent(walletId)}`,
+        { method: "DELETE" },
+      );
+      setWallet(snapshot.wallet);
       router.refresh();
     } catch (error) {
+      setWallet(previous);
       setRequestError(error instanceof Error ? error.message : "Unable to remove card.");
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -406,11 +421,13 @@ export function CardsView({
       )}
 
       {requestError && <p className="addcard__fine" role="alert">{requestError}</p>}
+      {removingId && <p className="addcard__fine" role="status">Removing card…</p>}
 
       {tab === "wallet" ? (
         <Wallet
           wallet={wallet}
           rechecking={rechecking}
+          removing={removingId !== null}
           onRecheck={recheck}
           onManual={(card) => {
             setAdding(false);

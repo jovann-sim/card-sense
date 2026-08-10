@@ -37,6 +37,10 @@ In demo mode the store also writes to `.localstore.json` so cards you add
 survive a restart. Delete that file to start clean; it is gitignored, and
 Firestore takes over entirely when `DEMO_MODE=false`.
 
+The current snapshot has a ten-second per-process read-through cache by
+default, configured with `SNAPSHOT_CACHE_TTL_SECONDS`. Agent runs and mutations
+replace the cached value when they persist a new snapshot.
+
 ## Card intelligence
 
 Reads a card's published terms and returns rules the optimiser can price
@@ -119,6 +123,11 @@ The scheduler endpoint should be protected by a service-to-service secret in pro
 Agents communicate through persisted state rather than direct agent-to-agent calls. A run writes:
 
 `transactions -> forecasts + card_rules -> strategy_runs -> advice -> snapshots/current`
+
+Goal and planned-spending mutations use targeted projections instead of full
+agent runs: they persist the authoritative input, patch only the affected goal
+or forecast fields, retain existing advice and activity, and replace the
+current snapshot. This keeps interactive writes fast when Firestore is remote.
 
 The projection is the sole owner of the read-model shape. Authoritative user
 state lives in subcollections (`transactions`, `planned`, `wallet`,
