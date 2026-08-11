@@ -38,6 +38,7 @@ class IngestionNode(BaseAgent):
     """Normalises the transaction feed and reports its coverage."""
 
     uid: str = "demo-user"
+    run_id: str = ""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         summary = IngestionAgent().run(self.uid, store)
@@ -54,6 +55,7 @@ class StrategyNode(BaseAgent):
     """Prices every card against actual spending. Every money figure starts here."""
 
     uid: str = "demo-user"
+    run_id: str = ""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         wallet = store.get_wallet(self.uid)
@@ -61,13 +63,15 @@ class StrategyNode(BaseAgent):
             card["cardId"]: (store.get_global_doc("card_rules", card["cardId"]) or {}).get("rules", [])
             for card in wallet
         }
-        result = StrategyAgent().run(
-            store.get_subcollection(self.uid, "transactions"),
-            wallet,
-            rules,
-            store.get_user(self.uid).get("goal"),
+        goal = store.get_user(self.uid).get("goal")
+        agent = StrategyAgent()
+        result = agent.run(
+            store.get_subcollection(self.uid, "transactions"), wallet, rules, goal,
         )
+        result["goal"] = agent.goal_projection(goal, result["captured"])
         ctx.session.state["strategy"] = result
+        if self.run_id:
+            store.set_subdoc(self.uid, "strategy_runs", self.run_id, result)
         yield _note(
             self,
             f"Priced {len(wallet)} cards across {len(result['categories'])} categories: "
@@ -79,6 +83,7 @@ class ForecastNode(BaseAgent):
     """Projects near-term spending and the dates the right card changes."""
 
     uid: str = "demo-user"
+    run_id: str = ""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         wallet = store.get_wallet(self.uid)
@@ -92,6 +97,8 @@ class ForecastNode(BaseAgent):
             },
         )
         ctx.session.state["forecast"] = result
+        if self.run_id:
+            store.set_subdoc(self.uid, "forecasts", self.run_id, result)
         yield _note(
             self,
             f"Projected {result['projectedSpend']:.2f} over {result['horizonDays']} days "

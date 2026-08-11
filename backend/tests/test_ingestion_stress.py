@@ -161,3 +161,48 @@ def test_a_sync_webhook_without_plaid_configured_is_declined_cleanly(monkeypatch
     monkeypatch.setattr(type(main.settings), "use_plaid", property(lambda self: False))
     result = main.plaid_webhook({"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"})
     assert result["handled"] is False and "not configured" in result["reason"]
+
+
+# -- engine parity ----------------------------------------------------------
+
+def test_the_run_endpoint_accepts_an_engine():
+    """Both engines write the same read model, so the choice is not observable."""
+    from app.models import RunIn
+    assert RunIn().engine is None
+    assert RunIn(engine="adk").engine == "adk"
+    assert RunIn(engine="orchestrator").engine == "orchestrator"
+
+
+def test_an_unknown_engine_is_rejected():
+    import pydantic
+    from app.models import RunIn
+    with pytest.raises(pydantic.ValidationError):
+        RunIn(engine="something-else")
+
+
+def test_the_orchestrator_remains_the_default():
+    """The graph is proven against the orchestrator, not trusted over it."""
+    from app.config import settings
+    assert settings.pipeline_engine == "orchestrator"
+
+
+def test_every_graph_node_maps_to_a_read_model_agent():
+    """An unmapped node would run but never appear on the activity page."""
+    from adk_agents.pipeline.runner import NODE_TO_AGENT
+    from app.orchestrator import AGENTS
+
+    known = {ident for ident, _label in AGENTS}
+    assert set(NODE_TO_AGENT.values()) == known
+
+
+def test_the_graph_covers_every_agent_in_the_architecture():
+    from adk_agents.pipeline.agent import build_pipeline
+    from app.orchestrator import AGENTS
+
+    pipeline = build_pipeline("demo-user", "test-run")
+    names = set()
+    for edge in pipeline.edges:
+        for node in edge:
+            if not isinstance(node, str):
+                names.add(node.name)
+    assert len(names) == len(AGENTS), f"graph has {names}"

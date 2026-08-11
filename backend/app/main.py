@@ -286,9 +286,29 @@ def snapshot():
     return snap
 
 
+def _run_via_adk(uid: str, request: str) -> tuple[str, dict]:
+    """Execute the pipeline as an ADK graph and project the result.
+
+    The graph's nodes persist to the same collections the orchestrator writes,
+    so the projection assembles a snapshot without knowing which engine ran —
+    which is the property that makes swapping engines safe.
+    """
+    from adk_agents.pipeline.runner import run_pipeline
+
+    run_id, _state = run_pipeline(uid, request)
+    snapshot = orch.project(uid, run_id)
+    store.set_snapshot(uid, snapshot)
+    store.set_user(uid, {"lastRunId": run_id, "lastRunAt": snapshot["generatedAt"]})
+    return run_id, snapshot
+
+
 @app.post("/api/v1/runs", response_model=RunResponse)
 def run_agents(body: RunIn):
-    run_id, snap = orch.run(UID, body.request)
+    engine = body.engine or settings.pipeline_engine
+    if engine == "adk":
+        run_id, snap = _run_via_adk(UID, body.request)
+    else:
+        run_id, snap = orch.run(UID, body.request)
     return {"runId": run_id, "snapshot": snap}
 
 
