@@ -63,9 +63,39 @@ second principle. They are tools the workflow calls, not agents that reason.
 - The FastAPI orchestrator remains the live path. Do not remove it until the
   ADK pipeline is proven end to end.
 
+## The pipeline
+
+`adk_agents/pipeline` composes all five agents as one graph:
+
+```
+ingestion ─┬─> card_intelligence ─┐
+           └─> forecast ──────────┴─> strategy ─> advisory
+```
+
+Card intelligence and forecast do not depend on each other, so the graph runs
+them concurrently. Strategy waits for both, because it prices what was ingested
+against the rules that were read.
+
+The three deterministic agents are `BaseAgent` subclasses, not tools. A tool is
+something a model chooses to call; these always run, in order, and handing that
+decision to a planner would let the same inputs produce different figures on
+different runs. Each delegates to the existing implementation in `app/agents/`,
+so there is one copy of the logic and the two paths cannot drift.
+
+```bash
+PYTHONPATH=. GOOGLE_GENAI_USE_VERTEXAI=TRUE \
+GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e \
+GOOGLE_CLOUD_LOCATION=global \
+adk run adk_agents/pipeline "Run the CardSense analysis for demo-user."
+```
+
+Verified end to end against live Firestore: ingestion reported coverage,
+card intelligence read a real terms document, strategy priced the wallet, and
+advisory declined to invent advice when the gap was $0.16 — "less than a dollar
+a month" — which is the restraint the instruction asks for.
+
 ## Next
 
-- Expose ingestion, forecast and strategy as tools.
-- Compose a `Workflow` over the two agents and three tools.
-- Switch the orchestrator to call the workflow, keeping the current path until
-  the new one is proven.
+- Switch the FastAPI orchestrator to call the workflow, keeping the current
+  path until the new one is proven.
+- Persist workflow runs to `agent_runs` so the activity page shows ADK stages.
