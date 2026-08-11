@@ -8,7 +8,7 @@ import uuid
 import logging
 from time import perf_counter
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.terms import document_from_upload
@@ -26,6 +26,7 @@ from .models import (
     ExchangeTokenIn,
     SyncIn,
     Snapshot,
+    ForecastOutput,
     RunResponse,
     CardResponse,
 )
@@ -284,6 +285,23 @@ def snapshot():
         snap = migration_orchestrator.refresh_forecast_projection(UID, snap)
     logger.info("snapshot uid=%s duration_ms=%d persisted=%s", UID, round((perf_counter() - started) * 1000), persisted)
     return snap
+
+
+@app.get("/api/v1/forecast", response_model=ForecastOutput)
+def forecast(months: int = Query(1, ge=1, le=12)):
+    """Spending projected over a chosen horizon, recomputed on demand.
+
+    Separate from the snapshot because the horizon is a view preference, not a
+    fact about the account: switching from one month to twelve should not
+    invalidate a run or cost a model call.
+    """
+    started = perf_counter()
+    result = orch.forecast_for(UID, months)
+    logger.info(
+        "forecast uid=%s months=%d duration_ms=%d extrapolated=%s",
+        UID, months, round((perf_counter() - started) * 1000), result["extrapolated"],
+    )
+    return result
 
 
 def _run_via_adk(uid: str, request: str) -> tuple[str, dict]:

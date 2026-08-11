@@ -90,15 +90,60 @@ class TimelineEntry(BaseModel):
     amount: float | None = None
 
 
+class ForecastMonth(BaseModel):
+    month: str
+    label: str
+    days: int
+    variable: float
+    recurring: float
+    planned: float
+    total: float
+    cumulative: float
+    cumulativeConfidence: float
+
+
+class ForecastCategory(BaseModel):
+    category: str
+    mcc: str
+    variable: float
+    recurring: float
+    planned: float
+    projected: float
+    monthly: float
+    share: float
+
+
+class RecurringStream(BaseModel):
+    merchant: str
+    category: str | None = None
+    cadence: Literal["weekly", "fortnightly", "monthly", "quarterly", "yearly"]
+    amount: float
+    monthlyAmount: float
+    occurrences: int
+    nextDue: str
+    confidence: Literal["low", "medium", "high"]
+
+
 class ForecastOutput(BaseModel):
     horizonDays: int
+    horizonMonths: int = 1
     baselineSpend: float
+    variableSpend: float = 0.0
+    recurringSpend: float = 0.0
     plannedSpend: float
     projectedSpend: float
     historyDays: int
     quality: ForecastQuality
     confidence: float
+    # How far the history actually supports projecting, and whether the chosen
+    # horizon went past it. Stated so the interface can distinguish a forecast
+    # from an extrapolation instead of presenting both with equal certainty.
+    reliableMonths: int = 0
+    extrapolated: bool = False
     basis: str
+    months: list[ForecastMonth] = []
+    categories: list[ForecastCategory] = []
+    recurring: list[RecurringStream] = []
     timeline: list[TimelineEntry]
     doNothingCost: float
     doNothingWindow: str

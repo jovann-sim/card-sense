@@ -23,9 +23,15 @@ def test_trailing_history_zero_fills_days_and_uses_observed_variability():
     samples = [100, *([0] * 8), 100]
     assert result["historyDays"] == 10
     assert result["quality"] == "limited"
-    assert result["baselineSpend"] == 600
-    assert result["projectedSpend"] == 600
-    assert result["confidence"] == round(max(1.28 * pstdev(samples) * sqrt(30), 180), 2)
+    # One month from 10 August runs to 9 September: 31 days. Calendar
+    # arithmetic, so a twelve-month horizon does not quietly lose five days.
+    assert result["horizonDays"] == 31
+    assert result["baselineSpend"] == 620
+    assert result["projectedSpend"] == 620
+    # Day-to-day noise grows with the square root of the horizon; the error in
+    # the estimated mean grows linearly with it. Both are counted.
+    band = 1.28 * pstdev(samples) * sqrt(31 + 31 ** 2 / 10)
+    assert result["confidence"] == round(max(band, 620 * 0.30), 2)
 
 
 def test_planned_spend_counts_full_amount_only_when_start_is_in_horizon():
@@ -33,8 +39,8 @@ def test_planned_spend_counts_full_amount_only_when_start_is_in_horizon():
     today = date(2026, 8, 10)
     planned = [
         {"id": "today", "kind": "purchase", "label": "Today", "startDate": today, "amount": 100, "categories": ["Dining"]},
-        {"id": "last", "kind": "event", "label": "Last day", "startDate": today + timedelta(days=29), "amount": 200, "categories": ["Travel"]},
-        {"id": "outside", "kind": "purchase", "label": "Outside", "startDate": today + timedelta(days=30), "amount": 300, "categories": ["Online retail"]},
+        {"id": "last", "kind": "event", "label": "Last day", "startDate": today + timedelta(days=30), "amount": 200, "categories": ["Travel"]},
+        {"id": "outside", "kind": "purchase", "label": "Outside", "startDate": today + timedelta(days=31), "amount": 300, "categories": ["Online retail"]},
     ]
 
     result = agent.run([], planned, today=today)
@@ -162,5 +168,5 @@ def test_observed_leakage_rate_prices_cost_of_doing_nothing():
         leakage_rate=0.04,
     )
 
-    assert result["projectedSpend"] == 3000
-    assert result["doNothingCost"] == 120
+    assert result["projectedSpend"] == 3100
+    assert result["doNothingCost"] == 124

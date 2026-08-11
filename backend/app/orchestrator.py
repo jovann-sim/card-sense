@@ -349,6 +349,26 @@ class Orchestrator:
         self.store.set_snapshot(uid, projected)
         return projected
 
+    def forecast_for(self, uid, horizon_months: int = 1) -> dict:
+        """Re-project spending over a different horizon, and nothing else.
+
+        Changing the horizon is a question about arithmetic already-held data
+        can answer. Routing it through a full run would re-invoke Gemini and
+        re-extract card terms to produce a number that depends on neither.
+        """
+        transactions = self.store.get_subcollection(uid, "transactions")
+        planned = self.store.get_subcollection(uid, "planned")
+        wallet = self.store.get_wallet(uid)
+        snapshot = self.store.get_snapshot(uid) or {}
+        return self.forecast.run(
+            transactions,
+            planned,
+            wallet,
+            self._rules(wallet),
+            leakage_rate=self._snapshot_leakage_rate(snapshot),
+            horizon_months=horizon_months,
+        )
+
     def project(self, uid, run_id):
         now = self._now()
         transactions = self.store.get_subcollection(uid, "transactions")

@@ -248,8 +248,8 @@ def test_non_purchases_and_pending_rows_do_not_inflate_snapshot_or_forecast():
     assert snapshot["totals"]["netSpend"] == 80
     # Ten calendar days from the first eligible row through today:
     # net spend 80 / 10 observed days * the 30-day horizon.
-    assert snapshot["forecast"]["baselineSpend"] == 240
-    assert snapshot["forecast"]["projectedSpend"] == 240
+    assert snapshot["forecast"]["baselineSpend"] == 248
+    assert snapshot["forecast"]["projectedSpend"] == 248
 
 
 def test_forecast_cost_uses_observed_strategy_leakage_rate():
@@ -284,5 +284,5 @@ def test_forecast_cost_uses_observed_strategy_leakage_rate():
     _, snapshot = Orchestrator(store).run("user")
 
     assert snapshot["totals"]["unclaimed"] == 4
-    assert snapshot["forecast"]["projectedSpend"] == 3000
-    assert snapshot["forecast"]["doNothingCost"] == 120
+    assert snapshot["forecast"]["projectedSpend"] == 3100
+    assert snapshot["forecast"]["doNothingCost"] == 124
