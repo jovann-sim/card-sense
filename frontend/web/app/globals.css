@@ -3027,3 +3027,14 @@ body {
   .streams__monthly, .streams__conf { grid-column: 2; justify-self: end; }
   .ftable { font-size: 0.82rem; }
 }
+
+/* A habit is regular but not committed: shown, because the user should see
+   what we noticed, but visibly not in the same class as a standing bill. */
+.streams__row[data-kind="habit"] .streams__merchant { color: var(--slate); }
+.streams__row[data-kind="habit"] .streams__amount { color: var(--slate); }
+.streams__conf[data-level="habit"] {
+  border-style: dashed;
+  border-color: var(--hairline-strong);
+  background: transparent;
+  color: var(--slate-soft);
+}

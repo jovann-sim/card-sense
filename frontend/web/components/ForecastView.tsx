@@ -28,6 +28,7 @@ const HORIZONS = [1, 3, 6, 12] as const;
 const CADENCE_LABEL: Record<Cadence, string> = {
   weekly: "every week",
   fortnightly: "every fortnight",
+  "semi-monthly": "twice a month",
   monthly: "every month",
   quarterly: "every quarter",
   yearly: "every year",
@@ -67,10 +68,9 @@ export function ForecastView({
   const actionable = currentForecast.timeline.filter((e) => e.action).length;
   const months = currentForecast.horizonMonths;
   const peak = Math.max(1, ...currentForecast.months.map((m) => m.total));
-  const commitment = currentForecast.recurring.reduce(
-    (total, stream) => total + stream.monthlyAmount,
-    0,
-  );
+  const bills = currentForecast.recurring.filter((s) => s.kind === "bill");
+  const habits = currentForecast.recurring.filter((s) => s.kind === "habit");
+  const commitment = bills.reduce((total, s) => total + s.monthlyAmount, 0);
 
   async function addItem(item: PlannedItemDraft) {
     setSaving(true);
@@ -216,14 +216,27 @@ export function ForecastView({
           <section className="section">
             <h2 className="section__label">What repeats</h2>
             <p className="section__note">
-              {money(commitment)} a month is already spoken for. These are
+              {money(commitment)} a month is already spoken for across{" "}
+              {bills.length} {bills.length === 1 ? "commitment" : "commitments"},
               projected on their own schedule rather than averaged, so a
               quarterly bill lands in the quarter it is due.
+              {habits.length > 0 && (
+                <>
+                  {" "}
+                  The other {habits.length} repeat too, but a restaurant does not
+                  bill you by arrangement — those stay in variable spending,
+                  where the range around them is honest.
+                </>
+              )}
             </p>
 
             <ul className="streams">
               {currentForecast.recurring.map((stream) => (
-                <li key={`${stream.merchant}-${stream.cadence}`} className="streams__row">
+                <li
+                  key={`${stream.merchant}-${stream.cadence}`}
+                  className="streams__row"
+                  data-kind={stream.kind}
+                >
                   <div className="streams__who">
                     <p className="streams__merchant">{stream.merchant}</p>
                     <p className="streams__meta">
@@ -235,8 +248,13 @@ export function ForecastView({
                   <p className="streams__monthly num">
                     {money(stream.monthlyAmount)}/mo
                   </p>
-                  <span className="streams__conf" data-level={stream.confidence}>
-                    {CONFIDENCE_LABEL[stream.confidence]}
+                  <span
+                    className="streams__conf"
+                    data-level={stream.kind === "habit" ? "habit" : stream.confidence}
+                  >
+                    {stream.kind === "habit"
+                      ? "habit"
+                      : CONFIDENCE_LABEL[stream.confidence]}
                   </span>
                 </li>
               ))}

@@ -7,7 +7,7 @@ from math import sqrt
 from statistics import pstdev
 
 from .ingestion import is_eligible_purchase
-from .recurring import detect_streams, occurrences_between, split_history
+from .recurring import commitments, detect_streams, occurrences_between, split_history
 from .strategy import rule_matches, rule_rate, unmet_rule_conditions
 
 DAYS_PER_MONTH = 30.44
@@ -59,6 +59,10 @@ class ForecastAgent:
         # Streams are detected on everything available, because a quarterly bill
         # needs more than a quarter of history to be visible at all.
         streams = detect_streams(transactions, today=as_of)
+        # Only a standing arrangement to pay is projected by date. A habit that
+        # happens to be regular stays in the variable pool, where it is priced
+        # as a rate with a range around it rather than asserted as a fact.
+        bills = commitments(streams)
 
         window_start = as_of - timedelta(days=self.history_limit_days - 1)
         recent = [
@@ -69,9 +73,9 @@ class ForecastAgent:
             [row["transaction"] for row in recent], streams, today=as_of
         )
 
-        history_days, daily_mean, daily_sd = self._daily_rate(variable_rows, as_of)
+        history_days, daily_mean, samples = self._daily_rate(variable_rows, as_of)
         variable = max(0.0, daily_mean * horizon_days)
-        recurring = self._recurring_spend(streams, as_of, end)
+        recurring = self._recurring_spend(bills, as_of, end)
         baseline = variable + recurring
 
         in_window = self._planned_in_window(planned, as_of, end)
@@ -79,8 +83,8 @@ class ForecastAgent:
         projected = max(0.0, baseline + planned_spend)
 
         confidence = self._band(
-            self._variable_sd(daily_sd, horizon_days, history_days, variable),
-            self._recurring_sd(streams, as_of, end, months),
+            self._variable_sd(samples, horizon_days, history_days, variable),
+            self._recurring_sd(bills, as_of, end, months),
         )
         quality = "none" if history_days == 0 else ("limited" if history_days < 14 else "good")
         reliable = self._reliable_months(history_days)
@@ -101,15 +105,15 @@ class ForecastAgent:
             "confidence": round(confidence, 2),
             "reliableMonths": reliable,
             "extrapolated": months > reliable,
-            "basis": self._basis(history_days, bool(in_window), months, reliable, streams),
-            "months": self._monthly(as_of, months, daily_mean, daily_sd, history_days, streams, planned),
+            "basis": self._basis(history_days, bool(in_window), months, reliable, bills, streams),
+            "months": self._monthly(as_of, months, daily_mean, samples, history_days, bills, planned),
             "categories": self._categories(
-                variable_rows, history_days, horizon_days, streams, in_window, as_of, end, projected
+                variable_rows, history_days, horizon_days, bills, in_window, as_of, end, projected
             ),
             "recurring": [
                 {key: stream[key] for key in (
                     "merchant", "category", "cadence", "amount", "monthlyAmount",
-                    "occurrences", "nextDue", "confidence",
+                    "occurrences", "nextDue", "confidence", "kind",
                 )}
                 for stream in streams
             ],
@@ -141,22 +145,31 @@ class ForecastAgent:
             return 1
         return min(12, max(1, value))
 
-    def _daily_rate(self, rows, as_of: date) -> tuple[int, float, float]:
-        """Mean and spread of daily variable spend, over the observed span.
+    def _daily_rate(self, rows, as_of: date) -> tuple[int, float, list[float]]:
+        """Mean daily variable spend and the day-by-day series behind it.
 
-        Days with no spending are real zeros and stay in the sample — dropping
+        Days with no spending are real zeros and stay in the series — dropping
         them would price a week of spending as if it happened every day.
         """
         dated = [(when, row) for row in rows if (when := self._parse_date(row.get("date")))]
         if not dated:
-            return 0, 0.0, 0.0
+            return 0, 0.0, []
         first = min(when for when, _ in dated)
         history_days = (as_of - first).days + 1
         daily = defaultdict(float)
         for when, row in dated:
             daily[when] += float(row.get("amount", 0))
         samples = [daily[first + timedelta(days=offset)] for offset in range(history_days)]
-        return history_days, sum(samples) / history_days, pstdev(samples) if len(samples) > 1 else 0.0
+        return history_days, sum(samples) / history_days, samples
+
+    def _monthly_windows(self, samples: list[float]) -> list[float]:
+        """History cut into whole months, most recent first fully used."""
+        size = round(DAYS_PER_MONTH)
+        count = len(samples) // size
+        if count < 1:
+            return []
+        recent = samples[-count * size:]
+        return [sum(recent[index * size:(index + 1) * size]) for index in range(count)]
 
     # How wrong a detected stream's projected total can be, before the horizon
     # is taken into account. Two charges is one interval of evidence; three
@@ -167,20 +180,45 @@ class ForecastAgent:
     # is long enough to move house, switch phone plans and cancel a gym.
     STREAM_DRIFT_PER_MONTH = 0.02
 
-    def _variable_sd(self, daily_sd: float, horizon_days: int, history_days: int, variable: float) -> float:
-        """Uncertainty in the variable half, as a standard deviation.
+    def _variable_sd(self, samples: list[float], horizon_days: int, history_days: int, variable: float) -> float:
+        """Uncertainty in the variable half, measured at the horizon's own scale.
 
-        Two errors compound. Day-to-day variation grows with the square root of
-        the horizon, which is the familiar term. But the daily mean was itself
-        estimated from a finite history, and that error grows *linearly* with
-        the horizon — so projecting a year from a month is wrong in a way that
-        projecting a month from a month is not. Adding both variances gives
-        sd = σ·√(t + t²/n), and it is the second term that dominates far out.
+        Daily variance answers "how much might tomorrow differ", which is not
+        the question. Someone who spends nothing for six days and £400 on the
+        seventh has enormous daily variance and an entirely predictable month.
+        Extrapolating the daily figure produced a range wider than the
+        projection itself — a forecast of £1,700 give or take £1,800.
+
+        So variability is measured on whole months of history and scaled in
+        months. Two errors still compound: month-to-month variation grows with
+        the square root of the horizon, while the error in the estimated mean
+        grows linearly with it, giving sd = σ·√(k + k²/n) for k months
+        projected from n months observed. Far out, the second term dominates —
+        which is the honest reason a twelve-month figure is soft.
+
+        Under two months of history there are no windows to compare, so it
+        falls back to the daily series and the floor, both of which overstate.
         """
-        if history_days == 0:
+        if history_days == 0 or not samples:
             return 0.0
-        observed = daily_sd * sqrt(horizon_days + horizon_days ** 2 / history_days)
-        floor = variable * (0.30 if history_days < 14 else 0.10) / 1.28
+
+        months_ahead = horizon_days / DAYS_PER_MONTH
+        # The floor grows with the horizon for the same reason a commitment's
+        # does: habits change. Without this, a merchant visited at an identical
+        # amount three months running measures as *more* certain than rent,
+        # which inverts the whole point of separating them.
+        floor_rate = (0.30 if history_days < 14 else 0.10) + self.STREAM_DRIFT_PER_MONTH * months_ahead
+        floor = variable * floor_rate / 1.28
+
+        windows = self._monthly_windows(samples)
+        if len(windows) >= 2:
+            observed = pstdev(windows) * sqrt(
+                months_ahead + months_ahead ** 2 / len(windows)
+            )
+        elif len(samples) > 1:
+            observed = pstdev(samples) * sqrt(horizon_days + horizon_days ** 2 / history_days)
+        else:
+            observed = 0.0
         return max(observed, floor)
 
     def _recurring_sd(self, streams, start: date, end: date, months: int) -> float:
@@ -229,7 +267,7 @@ class ForecastAgent:
             for stream in streams
         )
 
-    def _monthly(self, as_of, months, daily_mean, daily_sd, history_days, streams, planned) -> list[dict]:
+    def _monthly(self, as_of, months, daily_mean, samples, history_days, streams, planned) -> list[dict]:
         """Month-by-month buckets, with a cumulative range on each.
 
         The range is cumulative rather than per-month because that is the
@@ -265,7 +303,7 @@ class ForecastAgent:
                 "cumulative": round(cumulative, 2),
                 "cumulativeConfidence": round(
                     self._band(
-                        self._variable_sd(daily_sd, elapsed, history_days, daily_mean * elapsed),
+                        self._variable_sd(samples, elapsed, history_days, daily_mean * elapsed),
                         self._recurring_sd(streams, as_of, finish, index + 1),
                     ), 2
                 ),
@@ -495,7 +533,7 @@ class ForecastAgent:
             return None
 
     def _basis(self, history_days: int, has_plans: bool, months: int = 1,
-               reliable: int = 0, streams=None) -> str:
+               reliable: int = 0, bills=None, streams=None) -> str:
         if history_days == 0:
             history = "No recent transaction history was available"
         elif history_days < 14:
@@ -504,10 +542,16 @@ class ForecastAgent:
             history = f"Based on {history_days} days of transaction history and observed daily variability"
 
         parts = [history]
-        if streams:
+        if bills:
             parts.append(
-                f"{len(streams)} recurring commitment{'s' if len(streams) != 1 else ''} "
+                f"{len(bills)} recurring commitment{'s' if len(bills) != 1 else ''} "
                 "projected by billing date rather than averaged"
+            )
+        habits = len(streams or []) - len(bills or [])
+        if habits > 0:
+            parts.append(
+                f"{habits} regular merchant{'s' if habits != 1 else ''} left in variable "
+                "spending, because a habit is not a commitment"
             )
         if has_plans:
             parts.append("declared spending included at the entered amount")

@@ -151,6 +151,7 @@ export interface TimelineEntry {
 export type Cadence =
   | "weekly"
   | "fortnightly"
+  | "semi-monthly"
   | "monthly"
   | "quarterly"
   | "yearly";
@@ -189,6 +190,9 @@ export interface RecurringStream {
   occurrences: number;
   nextDue: ISODate;
   confidence: "low" | "medium" | "high";
+  /** A bill is a standing arrangement, projected by date. A habit is regular
+   *  spending at one merchant, counted as a rate inside variable spend. */
+  kind: "bill" | "habit";
 }
 
 export interface Forecast {

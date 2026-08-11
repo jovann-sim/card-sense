@@ -16,7 +16,10 @@ from .ingestion import is_eligible_purchase
 # a stream into a monthly commitment.
 CADENCES: list[tuple[str, int, int, float]] = [
     ("weekly", 6, 8, 52 / 12),
-    ("fortnightly", 12, 16, 26 / 12),
+    ("fortnightly", 12, 15, 26 / 12),
+    # Twice a month, not every fourteen days: paid on the 1st and the 15th, the
+    # gaps alternate 14 and 17 and average slightly over a fortnight.
+    ("semi-monthly", 16, 18, 2.0),
     ("monthly", 26, 34, 1.0),
     ("quarterly", 84, 96, 1 / 3),
     ("yearly", 350, 380, 1 / 12),
@@ -25,6 +28,28 @@ CADENCES: list[tuple[str, int, int, float]] = [
 # How far past its due date a stream can drift before we stop projecting it.
 # A cancelled subscription must not be forecast for another eleven months.
 LAPSE_FACTOR = 1.8
+
+# Categories where a merchant legitimately charges you on a schedule.
+#
+# From transactions alone, "KFC, $500, every thirty days, three times running"
+# is arithmetically identical to a subscription — same merchant, same gap, same
+# amount. The only thing separating them is what the merchant *is*. A landlord
+# and a gym bill monthly by arrangement; a fried chicken shop does not, and a
+# repeating charge there is a habit that happens to be regular.
+#
+# The distinction is not cosmetic. A commitment is projected on its billing
+# date and carries little uncertainty. A habit is real spending, but claiming
+# to know its date and amount is a certainty we have not earned — so it goes
+# back into the variable pool, where it still counts, priced as a rate with a
+# range around it.
+BILL_CATEGORIES = {
+    "Rent", "Utilities", "Insurance", "Streaming", "Fitness", "Education",
+    "Medical", "Services", "Government", "Telecom", "Personal care",
+}
+
+
+def is_billable(category: str | None) -> bool:
+    return (category or "") in BILL_CATEGORIES
 
 _NOISE = re.compile(r"[^a-z0-9 ]+")
 # The display form keeps the issuer's own casing, so its noise pattern has to
@@ -133,7 +158,7 @@ def _stream_from(key: str, charges: dict[date, float], meta: dict, as_of: date) 
     # Every gap has to look like the same cadence. One merchant charged on the
     # 1st, the 2nd and the 30th is a habit with a coincidence in it, not a
     # subscription, and projecting it forward would invent money.
-    if any(abs(interval - typical) > max(3.0, typical * 0.3) for interval in intervals):
+    if any(abs(interval - typical) > max(4.0, typical * 0.35) for interval in intervals):
         return None
 
     amounts = [charges[when] for when in dates]
@@ -162,8 +187,10 @@ def _stream_from(key: str, charges: dict[date, float], meta: dict, as_of: date) 
     if (as_of - last_seen).days > typical * LAPSE_FACTOR:
         return None
 
+    billable = is_billable(meta.get("category"))
     return {
         "key": key,
+        "kind": "bill" if billable else "habit",
         "merchant": meta["merchant"],
         "category": meta.get("category"),
         "mcc": meta.get("mcc"),
@@ -195,6 +222,11 @@ def occurrences_between(stream: dict, start: date, end: date) -> list[date]:
     return dates
 
 
+def commitments(streams) -> list[dict]:
+    """Only the streams that represent a standing arrangement to pay."""
+    return [stream for stream in streams if stream.get("kind") == "bill"]
+
+
 def stream_keys(streams) -> set[str]:
     return {stream["key"] for stream in streams}
 
@@ -205,9 +237,13 @@ def split_history(transactions, streams, *, today: date | None = None) -> tuple[
     The variable baseline must be measured on what is left, or the recurring
     spend gets counted twice — once as a commitment and once inside the daily
     average that the commitment inflated.
+
+    Habits are deliberately left in. They are not projected by date, so their
+    history has to stay in the pool that is projected as a rate — removing it
+    would delete the spending from the forecast altogether.
     """
     as_of = today or date.today()
-    keys = stream_keys(streams)
+    keys = stream_keys(commitments(streams))
     recurring, variable = [], []
     for transaction in transactions:
         if not is_eligible_purchase(transaction):

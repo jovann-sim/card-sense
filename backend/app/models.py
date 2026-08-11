@@ -116,12 +116,15 @@ class ForecastCategory(BaseModel):
 class RecurringStream(BaseModel):
     merchant: str
     category: str | None = None
-    cadence: Literal["weekly", "fortnightly", "monthly", "quarterly", "yearly"]
+    cadence: Literal["weekly", "fortnightly", "semi-monthly", "monthly", "quarterly", "yearly"]
     amount: float
     monthlyAmount: float
     occurrences: int
     nextDue: str
     confidence: Literal["low", "medium", "high"]
+    # A bill is a standing arrangement and is projected by date. A habit is
+    # regular spending at one merchant, counted as a rate instead.
+    kind: Literal["bill", "habit"] = "bill"
 
 
 class ForecastOutput(BaseModel):

@@ -5,6 +5,7 @@ import pytest
 
 from app.agents.forecast import ForecastAgent, add_months
 from app.agents.recurring import (
+    commitments,
     detect_streams,
     normalise_merchant,
     occurrences_between,
@@ -330,3 +331,72 @@ def test_a_display_name_keeps_the_capitals_it_was_given():
     stream = detect_streams(transactions, today=TODAY)[0]
 
     assert stream["merchant"] == "United Airlines"
+
+
+# -- a habit is not a commitment --------------------------------------------
+
+def test_a_restaurant_charging_the_same_amount_monthly_is_not_a_commitment():
+    """The Plaid sandbox replays one basket monthly; four merchants at $500.
+
+    From the numbers alone this is indistinguishable from a subscription. What
+    separates them is what the merchant is: a landlord bills monthly by
+    arrangement, a fried chicken shop does not.
+    """
+    transactions = [charge(days, "KFC", 500.0, "Dining", "5814") for days in (1, 31, 61)]
+
+    stream = detect_streams(transactions, today=TODAY)[0]
+
+    assert stream["kind"] == "habit"
+    assert commitments([stream]) == []
+
+
+def test_a_gym_charging_the_same_amount_monthly_is_a_commitment():
+    transactions = [charge(days, "TOUCHSTONE CLIMBING", 78.5, "Fitness", "7997") for days in (1, 31, 61)]
+
+    stream = detect_streams(transactions, today=TODAY)[0]
+
+    assert stream["kind"] == "bill"
+    assert len(commitments([stream])) == 1
+
+
+def test_a_habit_still_counts_as_spending():
+    """Excluding it from commitments must not delete it from the forecast."""
+    kfc = [charge(days, "KFC", 500.0, "Dining", "5814") for days in (1, 31, 61)]
+
+    result = ForecastAgent().run(kfc, [], today=TODAY, horizon_months=1)
+
+    assert result["recurringSpend"] == 0.0
+    assert result["variableSpend"] > 0
+    assert result["projectedSpend"] > 0
+
+
+def test_a_habit_is_projected_with_a_wider_range_than_a_bill():
+    """Same money, different certainty — which is the point of the split."""
+    habit = [charge(days, "KFC", 500.0, "Dining", "5814") for days in (1, 31, 61)]
+    bill = [charge(days, "GREYSTONE", 500.0, "Rent", "6513") for days in (1, 31, 61)]
+    agent = ForecastAgent()
+
+    loose = agent.run(habit, [], today=TODAY, horizon_months=6)
+    firm = agent.run(bill, [], today=TODAY, horizon_months=6)
+
+    assert loose["confidence"] > firm["confidence"]
+
+
+def test_a_habit_is_still_reported_so_the_user_can_see_it():
+    transactions = [charge(days, "KFC", 500.0, "Dining", "5814") for days in (1, 31, 61)]
+
+    result = ForecastAgent().run(transactions, [], today=TODAY, horizon_months=1)
+
+    assert [s["kind"] for s in result["recurring"]] == ["habit"]
+    assert "habit is not a commitment" in result["basis"]
+
+
+def test_semi_monthly_billing_is_a_cadence_not_an_irregularity():
+    """Paid on the 1st and the 15th, the gaps alternate rather than repeat."""
+    transactions = [charge(days, "CITY PARKING", 60.0, "Services", "7523")
+                    for days in (2, 18, 32, 48, 62)]
+
+    stream = detect_streams(transactions, today=TODAY)[0]
+
+    assert stream["cadence"] in {"semi-monthly", "fortnightly"}
+    assert stream["monthlyAmount"] >= 120.0

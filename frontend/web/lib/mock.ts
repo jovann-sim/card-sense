@@ -371,9 +371,9 @@ export const snapshot: Snapshot = {
       { category: "Groceries", mcc: "5411", variable: 520, recurring: 0, planned: 0, projected: 520, monthly: 511, share: 0.1079 },
     ],
     recurring: [
-      { merchant: "GREYSTONE PROPERTY", category: "Rent", cadence: "monthly", amount: 950, monthlyAmount: 950, occurrences: 3, nextDue: "2026-09-01", confidence: "high" },
-      { merchant: "CON EDISON", category: "Utilities", cadence: "monthly", amount: 118, monthlyAmount: 118, occurrences: 3, nextDue: "2026-09-04", confidence: "medium" },
-      { merchant: "NETFLIX", category: "Streaming", cadence: "monthly", amount: 15.49, monthlyAmount: 15.49, occurrences: 2, nextDue: "2026-09-06", confidence: "low" },
+      { merchant: "GREYSTONE PROPERTY", category: "Rent", cadence: "monthly", amount: 950, monthlyAmount: 950, occurrences: 3, nextDue: "2026-09-01", confidence: "high", kind: "bill" },
+      { merchant: "CON EDISON", category: "Utilities", cadence: "monthly", amount: 118, monthlyAmount: 118, occurrences: 3, nextDue: "2026-09-04", confidence: "medium", kind: "bill" },
+      { merchant: "NETFLIX", category: "Streaming", cadence: "monthly", amount: 15.49, monthlyAmount: 15.49, occurrences: 2, nextDue: "2026-09-06", confidence: "low", kind: "bill" },
     ],
     doNothingCost: 180,
     doNothingWindow: "over the next month",
