@@ -9,3 +9,4 @@ google-genai==1.28.0
 plaid-python==38.0.0
 python-multipart==0.0.20
 httpx==0.28.1
+google-adk==2.6.3
