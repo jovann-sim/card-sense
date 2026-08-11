@@ -94,8 +94,28 @@ card intelligence read a real terms document, strategy priced the wallet, and
 advisory declined to invent advice when the gap was $0.16 — "less than a dollar
 a month" — which is the restraint the instruction asks for.
 
+## Running it from the API
+
+`POST /api/v1/runs` takes an optional `engine`:
+
+```bash
+curl -X POST localhost:8080/api/v1/runs -H 'Content-Type: application/json' -d '{"engine":"adk"}'
+```
+
+`PIPELINE_ENGINE` sets the default and stays `orchestrator`. The graph is
+proven against the orchestrator rather than trusted over it, and keeping both
+means there is a working path if one breaks close to a deadline.
+
+Both write the same read model. Run one then the other and the figures match to
+the cent — spend, captured and unclaimed — which is what makes the switch safe:
+it is not observable to a user.
+
+Each node's output is written to `agent_runs` as it happens, tagged
+`engine: "adk"`, so the activity page shows real stages with real timings. Those
+timings are worth looking at: the deterministic nodes finish in 2-43ms while
+card intelligence takes 30 seconds, which is the whole argument for keeping
+three of five agents out of a language model.
+
 ## Next
 
-- Switch the FastAPI orchestrator to call the workflow, keeping the current
-  path until the new one is proven.
-- Persist workflow runs to `agent_runs` so the activity page shows ADK stages.
+- Nothing outstanding. The graph and the orchestrator are at parity.

@@ -48,6 +48,10 @@ class CardIn(BaseModel):
 
 class RunIn(BaseModel):
     request: str = "Run the CardSense autonomous spending analysis."
+    # Which engine executes the pipeline. The ADK graph and the built-in
+    # orchestrator write the same read model, so this is not observable to a
+    # user — it exists so one can be proven against the other.
+    engine: Literal["orchestrator", "adk"] | None = None
 
 
 class LinkTokenIn(BaseModel):
