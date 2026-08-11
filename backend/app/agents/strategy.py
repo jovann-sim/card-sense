@@ -6,6 +6,8 @@ from datetime import date, timedelta
 
 
 from .ingestion import is_eligible_purchase
+from ..plaid_taxonomy import is_redirectable
+from ..routing import options as routing_options, service as routing_service, verdict
 from ..valuations import VALUATIONS  # noqa: F401  (re-exported; orchestrator imports it from here)
 
 # Labels meaning "we could not place this", however they were produced.
@@ -64,7 +66,7 @@ def rule_rate(rule, track) -> float:
 class StrategyAgent:
     id = "strategy"
 
-    def run(self, transactions, wallet, rules, goal=None):
+    def run(self, transactions, wallet, rules, goal=None, *, routing=None):
         grouped = defaultdict(list)
         for tx in transactions:
             # A credit card bill payment or a transfer between your own
@@ -75,6 +77,8 @@ class StrategyAgent:
             grouped[tx.get("category", "uncategorized")].append(tx)
 
         categories, total_captured, total_optimal, degraded = [], 0.0, 0.0, []
+        routable: list[dict] = []
+        chosen = routing_service(routing)
         cap_spend = defaultdict(float)
         for category, rows in grouped.items():
             spend = sum(float(row.get("amount", 0)) for row in rows)
@@ -88,6 +92,17 @@ class StrategyAgent:
             # than the card actually pays. It still counts as spend — it was
             # spent — it simply cannot be optimised, and the interface says so.
             if not category or str(category).lower() in UNCATEGORISED:
+                continue
+
+            # A landlord does not take a Visa. Rent, tuition and most insurance
+            # cannot go on a card at all, so pricing them at a card's rate
+            # invents both the reward earned and the reward missed — and on a
+            # real account rent is the largest line, which makes it the largest
+            # fiction. They are held out of the comparison and answered
+            # separately, by the only mechanism that actually applies: a
+            # bill-payment service that charges a fee to do it for you.
+            if is_redirectable(category, True):
+                routable.append(self._routing_case(category, rows, spend, wallet, rules, chosen))
                 continue
 
             # A display category can contain several different MCCs. Price
@@ -167,7 +182,9 @@ class StrategyAgent:
                 item["note"] = (item.get("note", "") + " " + "Tied with " + ", ".join(other_ties) + ".").strip()
             categories.append(item)
         categories.sort(key=lambda item: item["unclaimed"], reverse=True)
-        return {"categories": categories, "captured": round(total_captured, 2), "unclaimed": round(max(0, total_optimal-total_captured), 2), "degraded": degraded}
+        routable.sort(key=lambda item: item["spend"], reverse=True)
+        return {"categories": categories, "routable": routable,
+                "routingService": chosen.id, "captured": round(total_captured, 2), "unclaimed": round(max(0, total_optimal-total_captured), 2), "degraded": degraded}
 
     def goal_projection(self, goal, captured):
         if not goal:
@@ -182,6 +199,42 @@ class StrategyAgent:
         if projected and goal.get("deadline") and projected > str(goal["deadline"]):
             out["fix"] = {"action": "Route eligible spending to the highest-value verified card.", "pacePerMonth": round(pace * 1.1, 2), "projectedAt": str(date.today() + timedelta(days=round(max(0, months * 30 / 1.1))))}
         return out
+
+    def _best_rate_for(self, category, rows, wallet, rules) -> tuple[float, str | None]:
+        """The best rate any held card would pay, if this could go on one."""
+        best, name = 0.0, None
+        for mcc in {str(row.get("mcc") or "") or None for row in rows}:
+            candidates = self._candidates(category, wallet, rules, mcc)
+            if candidates and candidates[0][0] > best:
+                best, name = candidates[0][0], candidates[0][1]["name"]
+        return best, name
+
+    def _routing_case(self, category, rows, spend, wallet, rules, chosen) -> dict:
+        """What a bill-payment service would actually do to this category.
+
+        Reported whether or not it is a good idea. Staying silent on a losing
+        trade would leave the user to assume rent is simply unrewardable, when
+        the truth is that it is rewardable at a price which is usually too high
+        — and occasionally, to reach a welcome bonus, is not.
+        """
+        rate, card = self._best_rate_for(category, rows, wallet, rules)
+        priced = routing_options(spend, rate)
+        mine = next((row for row in priced if row["service"] == chosen.id), priced[0] if priced else None)
+        return {
+            "category": category,
+            "spend": round(spend, 2),
+            "transactions": len(rows),
+            "bestCard": card,
+            "rewardRate": round(rate, 4),
+            "service": chosen.id,
+            "serviceName": chosen.name,
+            "fee": mine["fee"] if mine else 0.0,
+            "reward": mine["reward"] if mine else 0.0,
+            "net": mine["net"] if mine else 0.0,
+            "worthIt": bool(mine and mine["net"] > 0),
+            "verdict": verdict(mine["net"] if mine else 0.0, category, chosen.name),
+            "alternatives": priced,
+        }
 
     def _candidates(self, category, wallet, rules, mcc=None):
         """Rules that could pay for this spending, best first.
@@ -224,3 +277,4 @@ class StrategyAgent:
         display string like "4% cash back", which is guesswork by comparison.
         """
         return rule_rate(rule, track)
+

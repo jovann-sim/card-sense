@@ -101,3 +101,95 @@ def test_a_malformed_model_response_does_not_take_down_the_run():
             return "not json at all"
 
     assert isinstance(AdvisoryAgent(Runtime()).run({"categories": [], "unclaimed": 0}, {}, []), list)
+
+
+# -- spending no card can reach ---------------------------------------------
+
+def _wallet_and_rules():
+    wallet = [{"cardId": "c", "name": "Blue Cash", "last4": "1111", "network": "Visa",
+               "track": "cashback", "accountId": "a", "parseStatus": "parsed"}]
+    rules = {"c": [{"id": "base", "categoryLabel": "Everything else", "rate": "2%", "valuePerDollar": 0.02}]}
+    return wallet, rules
+
+
+def _tx(category, mcc, amount, tid="t"):
+    return {"id": tid, "date": "2026-08-01", "merchant": "M", "amount": amount,
+            "category": category, "mcc": mcc, "isPurchase": True, "accountId": "a"}
+
+
+def test_rent_is_never_priced_as_card_spend():
+    """A landlord does not take a Visa, so a rate on rent is a fiction.
+
+    On a real account rent is the largest line, which made it the largest
+    fiction: it was reporting captured reward and an unclaimed gap on money no
+    card could ever have touched.
+    """
+    from app.agents.strategy import StrategyAgent
+
+    wallet, rules = _wallet_and_rules()
+    result = StrategyAgent().run(
+        [_tx("Rent", "6513", 2150.0, "r"), _tx("Dining", "5812", 40.0, "d")], wallet, rules
+    )
+
+    assert [c["category"] for c in result["categories"]] == ["Dining"]
+    assert [r["category"] for r in result["routable"]] == ["Rent"]
+
+
+def test_routing_rent_for_the_reward_alone_is_reported_as_a_loss():
+    from app.agents.strategy import StrategyAgent
+
+    wallet, rules = _wallet_and_rules()
+    routed = StrategyAgent().run([_tx("Rent", "6513", 2150.0, "r")], wallet, rules)["routable"][0]
+
+    assert routed["fee"] > routed["reward"]
+    assert routed["net"] < 0
+    assert routed["worthIt"] is False
+    assert "welcome-bonus" in routed["verdict"]
+
+
+def test_every_modelled_service_is_offered_for_comparison():
+    from app.agents.strategy import StrategyAgent
+    from app.routing import SERVICES
+
+    wallet, rules = _wallet_and_rules()
+    for choice in (None, "cardup", "melio"):
+        routed = StrategyAgent().run([_tx("Rent", "6513", 2150.0, "r")], wallet, rules,
+                                     routing=choice)["routable"][0]
+        assert len(routed["alternatives"]) == len(SERVICES)
+        if choice:
+            assert routed["service"] == choice
+
+
+def test_a_cheaper_service_loses_less():
+    from app.routing import price
+
+    dear = price(2150.0, 0.02, 0.029)
+    cheap = price(2150.0, 0.02, 0.026)
+    assert cheap["net"] > dear["net"]
+    assert cheap["net"] < 0            # cheaper, still a losing trade
+
+
+def test_reaching_a_welcome_bonus_is_the_case_that_wins():
+    from app.routing import bonus_case
+
+    assert bonus_case(0, 600, 0.029) is None
+    marginal = bonus_case(4000, 600, 0.029)
+    assert marginal["fee"] == 116.0 and marginal["worthIt"] is True
+
+
+def test_the_advisory_never_tells_you_to_put_rent_on_a_card():
+    from app.agents.advisory import AdvisoryAgent
+
+    class Runtime:
+        available = True
+        def json(self, *args, **kwargs):
+            return {"recommendations": []}
+
+    from app.agents.strategy import StrategyAgent
+    wallet, rules = _wallet_and_rules()
+    strategy = StrategyAgent().run([_tx("Rent", "6513", 2150.0, "r")], wallet, rules)
+    advice = AdvisoryAgent(Runtime()).run(strategy, {}, wallet)
+
+    routing = [item for item in advice if item["id"].startswith("rec-route-")]
+    assert len(routing) == 1
+    assert "cannot earn rewards" in routing[0]["headline"]
