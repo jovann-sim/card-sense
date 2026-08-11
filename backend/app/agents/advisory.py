@@ -76,10 +76,23 @@ class AdvisoryAgent:
             }
         )
 
-        recommendations = result.get("recommendations", fallback)
+        # A model asked for {"recommendations": [...]} sometimes returns the
+        # bare list instead. Both are honoured; anything else falls back rather
+        # than crashing the run, because a malformed advisory response must not
+        # take down figures that were computed without a model at all.
+        if isinstance(result, dict):
+            recommendations = result.get("recommendations", fallback)
+        elif isinstance(result, list):
+            recommendations = result
+        else:
+            recommendations = fallback
+        if not isinstance(recommendations, list):
+            recommendations = fallback
 
         # Guarantee frontend contract
         for i, rec in enumerate(recommendations):
+            if not isinstance(rec, dict):
+                continue
             rec.setdefault("id", f"rec-{i}")
 
             rec.setdefault(

@@ -167,15 +167,21 @@ def _stream_from(key: str, charges: dict[date, float], meta: dict, as_of: date) 
         return None
     spread = max(abs(amount - typical_amount) for amount in amounts) / typical_amount
 
-    # A utility bill moves with the season and a subscription does not. Allow
-    # real variation, but not so much that "recurring" stops meaning anything.
-    if spread > 0.35:
+    billable = is_billable(meta.get("category"))
+
+    # A utility bill moves with the season: heating in January against nothing
+    # in June is a swing of well over a third, and rejecting that would drop
+    # the most reliably recurring charge most people have. Where the category
+    # bills on a schedule, regular timing is the evidence and the amount is
+    # allowed to move. Where it does not, a stable amount is the only thing
+    # making the charge look like an arrangement at all, so it is held tight.
+    if spread > (0.60 if billable else 0.35):
         return None
 
     # Two charges is one interval — enough to notice, not enough to be sure.
     # It is reported at lower confidence rather than withheld, because with
     # ninety days of history a monthly bill can only ever have three.
-    if len(dates) >= 3 and spread <= 0.15:
+    if len(dates) >= 3 and spread <= (0.30 if billable else 0.15):
         confidence = "high"
     elif len(dates) >= 3:
         confidence = "medium"
@@ -187,7 +193,6 @@ def _stream_from(key: str, charges: dict[date, float], meta: dict, as_of: date) 
     if (as_of - last_seen).days > typical * LAPSE_FACTOR:
         return None
 
-    billable = is_billable(meta.get("category"))
     return {
         "key": key,
         "kind": "bill" if billable else "habit",

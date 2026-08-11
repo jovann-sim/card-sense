@@ -990,6 +990,59 @@ def reset_demo(x_internal_secret: str | None = Header(default=None)):
     }
 
 
+@app.post("/api/v1/demo/seed-realistic")
+def seed_realistic_demo(months: int = Query(12, ge=1, le=24)):
+    """Replace transactions with a year of plausible household spending.
+
+    The Plaid sandbox replays one basket every thirty days at identical
+    amounts, which is fine for proving the pipeline runs and useless for
+    judging whether its numbers are sensible — it makes four unrelated
+    merchants look like four subscriptions. This writes spending with the shape
+    real spending has, so the forecast can be read rather than excused.
+
+    Deterministic, so a demo can be rehearsed and a judge who reruns it sees
+    what was described.
+    """
+    from . import demo_data
+
+    wallet = store.get_wallet(UID)
+    accounts = [card["accountId"] for card in wallet if card.get("accountId")]
+    rows = demo_data.generate(months=months, account_ids=accounts or None)
+
+    # Wipe first. Leaving the sandbox rows in place would double the spend and
+    # mix two incompatible stories in one account. Both halves go in one batched
+    # call: a year of spending is several hundred documents, and writing them
+    # one at a time takes long enough that a reload can land mid-flight and
+    # leave the account emptied but not refilled.
+    #
+    # Only rows that are NOT being replaced may be deleted. The batch applies
+    # every upsert before any delete, so listing an id in both halves writes it
+    # and then removes it — which is how a previous version of this wiped the
+    # account clean while reporting success.
+    fresh = {row["id"] for row in rows}
+    store.apply_subdoc_changes(
+        UID,
+        upserts=[("transactions", row["id"], row) for row in rows],
+        deletes=[
+            ("transactions", existing["id"])
+            for existing in store.get_subcollection(UID, "transactions")
+            if existing["id"] not in fresh
+        ],
+    )
+
+    run_id, snapshot = orch.run(UID, "Seed realistic demo data", refresh_card_intelligence=False)
+    return {
+        "ok": True,
+        "runId": run_id,
+        "linkedAccounts": len(accounts),
+        **demo_data.summarise(rows),
+        "forecast": {
+            key: snapshot["forecast"][key]
+            for key in ("projectedSpend", "variableSpend", "recurringSpend", "confidence")
+        },
+    }
+
+
 @app.post("/api/v1/scheduler/run")
 def scheduled_run(x_internal_secret: str | None = Header(default=None)):
     if x_internal_secret != settings.internal_run_secret:

@@ -86,17 +86,34 @@ def test_charges_with_unstable_amounts_are_not_a_stream():
 
 
 def test_a_utility_bill_that_moves_with_the_season_is_still_a_stream():
+    """Heating in January against nothing in June swings by more than a third.
+
+    Rejecting that would drop the most reliably recurring charge most people
+    have. Where the category bills on a schedule, regular timing is the
+    evidence and the amount is allowed to move.
+    """
     transactions = [
-        charge(1, "CON EDISON", 128.0, "Utilities", "4900"),
-        charge(31, "CON EDISON", 79.0, "Utilities", "4900"),
+        charge(1, "CON EDISON", 150.0, "Utilities", "4900"),
+        charge(31, "CON EDISON", 78.0, "Utilities", "4900"),
         charge(61, "CON EDISON", 104.0, "Utilities", "4900"),
     ]
 
     streams = detect_streams(transactions, today=TODAY)
 
     assert len(streams) == 1
-    # Real variation, reported at lower confidence rather than withheld.
+    # Detected, but the swing is reported rather than smoothed over.
     assert streams[0]["confidence"] == "medium"
+
+
+def test_the_same_swing_at_a_shop_that_does_not_bill_is_rejected():
+    """Amount stability is the only evidence a non-billing merchant can offer."""
+    transactions = [
+        charge(1, "CORNER STORE", 150.0, "Groceries", "5411"),
+        charge(31, "CORNER STORE", 78.0, "Groceries", "5411"),
+        charge(61, "CORNER STORE", 104.0, "Groceries", "5411"),
+    ]
+
+    assert detect_streams(transactions, today=TODAY) == []
 
 
 def test_a_cancelled_subscription_is_not_projected_forward():
