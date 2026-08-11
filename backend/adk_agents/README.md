@@ -4,11 +4,16 @@
 
 ```bash
 cd backend && source .venv/bin/activate
+PYTHONPATH=. \
 GOOGLE_GENAI_USE_VERTEXAI=TRUE \
 GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e \
 GOOGLE_CLOUD_LOCATION=global \
-adk run adk_agents/advisory "your query"
+adk run adk_agents/card_intelligence "your query"
 ```
+
+`PYTHONPATH=.` matters: ADK loads an agent folder without the backend on the
+path, so any agent importing from `app` fails with `No module named 'app'`
+without it.
 
 Omit the query for an interactive session. `adk web adk_agents` gives a browser
 UI over every agent in this directory, which is the better demo surface.
@@ -48,6 +53,19 @@ second principle. They are tools the workflow calls, not agents that reason.
 
 ## Status
 
-- Advisory runs standalone and returns recommendations from supplied figures.
+- **Advisory** runs standalone and returns recommendations from supplied
+  figures, without recomputing them.
+- **Card intelligence** runs standalone with a fetch tool and a schema-
+  constrained result. Verified on both paths that matter: given a real document
+  it extracts the full structure at 0.9 confidence, and asked about a card it
+  demonstrably knows from training with no document supplied, it returns
+  `{"rules": [], "confidence": 0}` rather than reciting one.
 - The FastAPI orchestrator remains the live path. Do not remove it until the
   ADK pipeline is proven end to end.
+
+## Next
+
+- Expose ingestion, forecast and strategy as tools.
+- Compose a `Workflow` over the two agents and three tools.
+- Switch the orchestrator to call the workflow, keeping the current path until
+  the new one is proven.
