@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     terms_min_chars: int = 400
     terms_user_agent: str = "CardSense/0.1 (+card terms reader)"
 
+    # Which engine executes the pipeline. The ADK graph and the built-in
+    # orchestrator write the same read model, so this can be flipped without
+    # the interface noticing. The orchestrator stays the default until the
+    # graph has been proven against it under load.
+    pipeline_engine: str = "orchestrator"
+
     # Extraction quality gate. Below this the card is excluded rather than guessed.
     extraction_min_confidence: float = 0.35
 
