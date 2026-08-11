@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 RewardTrack = Literal["points", "cashback", "miles"]
 AdviceOutcome = Literal["open", "acted", "dismissed", "expired"]
-AgentStatus = Literal["ok", "degraded", "running"]
+AgentStatus = Literal["not-run", "ok", "degraded", "running"]
 ForecastQuality = Literal["none", "limited", "good"]
 
 
@@ -77,7 +77,7 @@ class AgentRun(BaseModel):
     id: Literal["ingestion", "forecast", "card-intelligence", "strategy", "advisory"]
     label: str
     status: AgentStatus
-    lastRunAt: str
+    lastRunAt: str | None = None
     note: str | None = None
 
 
@@ -105,7 +105,7 @@ class ForecastOutput(BaseModel):
 
 
 class Snapshot(BaseModel):
-    readModelVersion: int = 4
+    readModelVersion: int = 5
     generatedAt: str
     period: dict[str, Any]
     totals: dict[str, float]

@@ -219,7 +219,7 @@ footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-st
 <ul>
   <li><strong>Not a chatbot.</strong> There is no conversational surface in the primary flow. The system reports; it does not wait to be asked.</li>
   <li><strong>Not transactional.</strong> CardSense never moves money, never autofills a payment form, and never stores a card number. This is an architectural boundary, not an unimplemented feature — it removes PCI scope from the system entirely.</li>
-  <li><strong>Not a comparison site.</strong> Where cards the user does not hold appear, they are priced against that user&rsquo;s real spending, net of annual fee, and surfaced by an agent rather than browsed.</li>
+  <li><strong>Not intended as a generic comparison site.</strong> The current catalogue is descriptive and marks held cards, but new-card <code>deltaVsWallet</code> simulation is not implemented yet.</li>
 </ul>
 
 <h4>What the user contributes</h4>
@@ -232,7 +232,7 @@ footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-st
 
 <div class="principle">
   <p class="principle__t">1 &middot; Agents coordinate through shared state, never direct calls</p>
-  <p>Each agent reads the collections it needs and writes only its own. No agent invokes another. The consequences are what matter: a failing agent <em>degrades</em> the output instead of breaking a chain; two developers can own different agents without coupling their work; and every run is independently replayable and auditable after the fact.</p>
+  <p>Each agent reads the collections it needs and writes only its own. No agent invokes another. The consequences are what matter: incomplete input can <em>degrade</em> a stage visibly; two developers can own different agents without coupling their business logic; and every completed run is auditable after the fact. Stage-specific replay is not implemented yet.</p>
 </div>
 
 <div class="principle">
@@ -252,7 +252,7 @@ footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-st
 
 <div class="principle">
   <p class="principle__t">5 &middot; The advisory layer is held to account</p>
-  <p>Every recommendation is stored with the value it predicted. Once the period closes, actual earnings are compared against that prediction and the gap is displayed with its reason. The system reports when it was wrong, and adjusts its own thresholds in response.</p>
+  <p>Every recommendation is stored with the value it predicted and the interface can display predicted-versus-actual records. Automatic period-close reconciliation and threshold learning are not implemented yet; the current track record is the contract and UI foundation for that loop.</p>
 </div>
 
 <div class="principle">
@@ -293,12 +293,11 @@ footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-st
              └─────────┬─────────┘
                        ▼
             snapshots/current  ─────▶  Next.js dashboard (7 routes)
-                               ─────▶  Chrome extension popup
 
-   Every arrow above is a Firestore write followed by a Firestore read.
-   No agent holds a reference to another agent.</pre>
+   Demo mode uses the local JSON-backed store; non-demo mode uses Firestore.
+   No agent invokes another agent directly.</pre>
 
-<p>Forecast and Card Intelligence have no dependency on one another and run concurrently. Under the Agent Development Kit this composes as a sequential pipeline with a parallel stage in the middle:</p>
+<p>The authoritative runtime today is the built-in orchestrator: Ingestion, Card Intelligence, Strategy, Forecast, Advisory, then Projection. An experimental Agent Development Kit graph expresses the intended Forecast/Card Intelligence fan-out:</p>
 
 <pre class="dia">SequentialAgent
   ├── Ingestion
@@ -308,6 +307,11 @@ footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-st
   ├── Simulation &amp; Strategy
   ├── Advisory
   └── Projection</pre>
+
+<div class="warn">
+  <p class="note__l">ADK parity boundary</p>
+  <p>The ADK graph is not the default runtime. Card Intelligence and Advisory persistence, leakage-aware forecasting, and run telemetry still need parity tests before it can replace the orchestrator.</p>
+</div>
 
 <!-- ============================================================= 4 -->
 <h2 id="s4"><span class="n">04</span>The five agents</h2>
@@ -319,7 +323,7 @@ footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-st
 <tbody>
 <tr><td><strong>Ingestion</strong></td><td>Pull and normalise transactions</td><td class="no">No</td><td class="mono">transactions</td></tr>
 <tr><td><strong>Card Intelligence</strong></td><td>Extract reward rules from terms documents</td><td class="yes">Yes</td><td class="mono">card_rules</td></tr>
-<tr><td><strong>Forecast</strong></td><td>Project near-term spending and dated events</td><td>Partial</td><td class="mono">forecasts</td></tr>
+<tr><td><strong>Forecast</strong></td><td>Project near-term spending and dated events</td><td class="no">No</td><td class="mono">forecasts</td></tr>
 <tr><td><strong>Simulation &amp; Strategy</strong></td><td>Price every option, find the gap</td><td class="no">No</td><td class="mono">strategy_runs</td></tr>
 <tr><td><strong>Advisory</strong></td><td>Convert findings into recommendations</td><td class="yes">Yes</td><td class="mono">advice</td></tr>
 </tbody>
@@ -435,8 +439,8 @@ footer{margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline-st
     <li>Writes each recommendation as an imperative with its cost of inaction, ranked by dollars at risk before the nearest deadline rather than by raw size.</li>
     <li>Composes the <strong>reasoning trace</strong>: which agent contributed what, with the figures each one used. This is what makes a recommendation checkable instead of merely asserted.</li>
     <li>Constrained to describe only numbers it was handed. It has no arithmetic authority.</li>
-    <li>Records the predicted value with each recommendation, then reconciles against actual earnings once the period closes — including the reason for any gap.</li>
-    <li>Learns from user response: dismissed categories of advice are not re-raised, and thresholds adjust. An expired recommendation triggers earlier warning next cycle.</li>
+    <li>Records the predicted value and user outcome with each recommendation so a later reconciliation process has an accountable baseline.</li>
+    <li>Respects stored open, acted and dismissed outcomes. Automatic threshold adjustment and expiry-driven learning remain future work.</li>
   </ul>
 </div>
 
@@ -474,7 +478,7 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
 <p><strong>Next.js 16 (App Router), React 19, TypeScript, Tailwind v4.</strong> Server components by default; client components only where the user provides input.</p>
 
 <h3>The contract</h3>
-<p>Every page reads one typed <code>Snapshot</code> object. Seven files import it. Substituting live data for fixtures is a single-file change, and no component is aware of where its data came from. This is what makes the frontend genuinely ready for the backend rather than merely compatible with it.</p>
+<p>Every page reads one typed <code>Snapshot</code> object from FastAPI through a shared server-side loader. Development fixtures are used only when explicitly enabled; production fails visibly if the backend is unavailable. Browser mutations pass through a Next.js proxy that invalidates the tagged snapshot cache.</p>
 
 <h3>Seven surfaces, each answering for one agent</h3>
 <div class="tw"><table>
@@ -505,7 +509,7 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
 <!-- ============================================================= 7 -->
 <h2 id="s7"><span class="n">07</span>Chrome extension</h2>
 
-<p>Manifest V3. A content script identifies the merchant and whether the current page is a checkout. The popup shows which card to use, the rate, the reason, any cap caveat, the runner-up, and the same reasoning trace as the dashboard.</p>
+<p>Manifest V3 prototype. A content script can identify the merchant and whether the current page looks like a checkout, but the popup is not wired to that script or to the backend. Its recommendation is fixed demo data until a live merchant-recommendation endpoint is connected.</p>
 
 <div class="note">
   <p class="note__l">The hard boundary</p>
@@ -515,12 +519,12 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
 <!-- ============================================================= 8 -->
 <h2 id="s8"><span class="n">08</span>Deployment topology</h2>
 
-<p>Two Cloud Run services, both scaling to zero when idle:</p>
+<p>The intended deployment topology is two Cloud Run services, both scaling to zero when idle:</p>
 <ul>
   <li><strong>web</strong> — the Next.js application, serving the dashboard.</li>
-  <li><strong>agents</strong> — the ADK pipeline, exposed for on-demand runs and triggered on a schedule by Cloud Scheduler for the recurring pass.</li>
+  <li><strong>agents</strong> — FastAPI with the built-in orchestrator as the default and ADK as an experimental engine.</li>
 </ul>
-<p>Firestore provides both state and coordination. Its realtime listeners drive live agent progress in the interface: the client subscribes to the current run document and watches each agent report in as it completes — the onboarding sequence is the pipeline itself, not an animation of one.</p>
+<p>Firestore provides persistent state in non-demo mode; the JSON-backed local store provides the same interface in demo mode. Onboarding polls the run-status API. Plaid sync completes one real analysis run, and step 3 reuses it after a targeted goal write instead of launching a duplicate run.</p>
 <p>Scaling to zero matters beyond cost: an agent system that idles for free is one that can run on a schedule indefinitely without a standing bill, which is the deployment shape this product actually needs.</p>
 
 <!-- ============================================================= 9 -->
@@ -528,9 +532,10 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
 <ul>
   <li>Plaid access tokens never leave the server. The collection holding them is unreadable by any client, enforced in security rules rather than by convention.</li>
   <li>No card numbers are stored, transmitted, or entered anywhere in the system.</li>
-  <li>The browser reads only the agent run log directly; all other data is served through server components using privileged credentials.</li>
+  <li>The browser uses the Next.js backend proxy; server components load the snapshot directly from FastAPI.</li>
   <li>A visible disclaimer states the product is informational and not licensed financial advice.</li>
   <li>Sandbox data only. No production financial connection exists.</li>
+  <li><strong>Current limitation:</strong> application authentication, multi-user authorization, and Plaid webhook signature verification are not implemented. The fixed <code>demo-user</code> runtime must not be exposed as a shared production service.</li>
 </ul>
 
 <!-- ============================================================= 10 -->
@@ -541,11 +546,11 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
 <tbody>
 <tr><td>Terms document fails to parse</td><td>Card excluded from every comparison; manual rate entry offered</td></tr>
 <tr><td>Terms source rate-limited</td><td>Rules marked stale with date of last successful read; immediate recheck offered</td></tr>
-<tr><td>Merchant maps to multiple categories</td><td>Flagged, with the value at stake between interpretations</td></tr>
-<tr><td>Transaction spans two categories</td><td>Split at line-item level and annotated</td></tr>
+<tr><td>Merchant category is ambiguous</td><td>Flagged instead of silently treated as certain</td></tr>
+<tr><td>One display category contains several MCCs</td><td>Each MCC bucket is priced separately and the row is annotated</td></tr>
 <tr><td>Two cards score identically</td><td>Presented as a tie with the human-judgeable tiebreaker</td></tr>
 <tr><td>Reward cap reached mid-cycle</td><td>Surfaced on the card and as a dated forecast event</td></tr>
-<tr><td>Recommendation expires unused</td><td>Recorded against the track record with its cost; threshold adjusted</td></tr>
+<tr><td>Recommendation expires unused</td><td>Recorded against the track record with its predicted cost</td></tr>
 <tr><td>No goal set</td><td>Agent picks, states that it picked, and offers the correction</td></tr>
 </tbody>
 </table></div>
@@ -557,10 +562,10 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
 <thead><tr><th>Tool</th><th>Where it is used</th><th>Criterion it serves</th></tr></thead>
 <tbody>
 <tr><td><strong>Gemini API</strong></td><td>Card Intelligence (document understanding, including multimodal extraction from scanned terms); Advisory (plain-language recommendations and reasoning traces)</td><td>Innovation &amp; utility</td></tr>
-<tr><td><strong>Agent Development Kit</strong></td><td>The five-agent pipeline; sequential composition with a parallel stage; per-agent tooling; the evaluation harness used to regression-test agent behaviour</td><td>Architectural discipline</td></tr>
-<tr><td><strong>Cloud Run</strong></td><td>Two services — the web application and the agent pipeline — both scaling to zero</td><td>Architecture &amp; production readiness</td></tr>
-<tr><td><strong>Firestore</strong></td><td>Agent state and memory; the coordination mechanism between agents; the read model; realtime listeners driving live progress in the UI</td><td>Architecture &amp; demo</td></tr>
-<tr><td><strong>Cloud Scheduler</strong></td><td>Triggers the recurring autonomous run — the thing that makes this a background system rather than a page you visit</td><td>Operational utility</td></tr>
+<tr><td><strong>Agent Development Kit</strong></td><td>Experimental five-agent graph sharing the deterministic core; persistence parity remains incomplete</td><td>Architectural discipline</td></tr>
+<tr><td><strong>Cloud Run</strong></td><td>Target hosting platform for the web and FastAPI services</td><td>Architecture &amp; production readiness</td></tr>
+<tr><td><strong>Firestore</strong></td><td>Non-demo persistent state, agent outputs, and the snapshot read model</td><td>Architecture &amp; demo</td></tr>
+<tr><td><strong>Cloud Scheduler</strong></td><td>Calls the protected scheduler endpoint in the intended deployment</td><td>Operational utility</td></tr>
 <tr><td><strong>Google AI Studio</strong></td><td>Prompt development and iteration for the two Gemini-driven agents before any agent code is written</td><td>Development velocity</td></tr>
 </tbody>
 </table></div>
@@ -569,9 +574,9 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
 <h4>Innovation &amp; operational utility</h4>
 <p>Two things here are genuinely uncommon. First, the system acts <em>before</em> the fact — a declared trip produces a dated warning that a cap will be breached mid-journey, with the split to make instead. Second, the system is <strong>accountable</strong>: it records what it predicted and reports what actually happened, including its own misses. Most tools of this kind make claims; this one is checkable.</p>
 <h4>Architectural discipline &amp; tech stack</h4>
-<p>Five agents coordinating through shared state with no direct calls; a parallel stage where the dependency graph permits it; a deliberate and defended boundary between what a language model does and what deterministic code does; and a read model that decouples agent schemas from the interface entirely.</p>
+<p>Five stages coordinating through shared state with no direct agent-to-agent calls; a deliberate boundary between model work and deterministic arithmetic; a single read model; and an experimental ADK graph whose remaining parity gaps are explicit.</p>
 <h4>Demo &amp; production readiness</h4>
-<p>A run log showing every agent execution with timing, inputs, outputs and failures. Eight degraded states handled visibly rather than hidden. A deployed URL that scales to zero. And an architecture document that states plainly what is built and what is not.</p>
+<p>A run log showing actual stage execution, duration, reads, writes and degraded input; visible empty and failure states; and an architecture document that states plainly what is built and what is not.</p>
 
 <!-- ============================================================= 12 -->
 <h2 id="s12"><span class="n">12</span>Implementation status</h2>
@@ -581,40 +586,40 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
   <div class="status__c" data-s="built">
     <p class="status__l">Built &amp; verified</p>
     <ul>
-      <li>Seven-route web application, all interaction states</li>
-      <li>Chrome extension popup</li>
-      <li>Complete design system</li>
-      <li>The <code>Snapshot</code> data contract</li>
-      <li>Deterministic pace-projection and cap-collision logic</li>
-      <li>All three user input flows</li>
-      <li>Responsive to 375px; clean production build and lint</li>
+      <li>Seven-route web application reading the live FastAPI snapshot</li>
+      <li>Plaid Sandbox Link, cursor sync, webhooks, account display and scoped disconnect</li>
+      <li>Five-stage default orchestrator with persisted activity</li>
+      <li>Card terms extraction, validation, provenance and manual fallback</li>
+      <li>Deterministic strategy, forecast, goals and planned-spend projections</li>
+      <li>Validated <code>Snapshot</code> contract, cache invalidation and truthful empty states</li>
+      <li>Local persistence plus Firestore storage mode; clean tests, lint and production build</li>
     </ul>
   </div>
   <div class="status__c" data-s="partial">
-    <p class="status__l">Placeholder</p>
+    <p class="status__l">Partial or experimental</p>
     <ul>
-      <li>All data is fixtures — internally consistent, and containing every degraded state in section 10 by design</li>
-      <li>User input persists in memory only</li>
-      <li>Reward conversion rates pending confirmation</li>
-      <li>Extension content script exists but is not yet wired to the popup</li>
+      <li>ADK graph exists but does not yet match orchestrator persistence and forecast output completely</li>
+      <li>Reward-condition and statement-cycle simulation needs stricter transaction-level enforcement</li>
+      <li>Some reward conversion rates use explicit fallback assumptions</li>
+      <li>Card catalogue does not yet compute a real <code>deltaVsWallet</code></li>
+      <li>Extension shell and detector exist, but the popup recommendation remains fixed demo data</li>
     </ul>
   </div>
   <div class="status__c" data-s="none">
     <p class="status__l">Not yet built</p>
     <ul>
-      <li>The five agents</li>
-      <li>Firestore</li>
-      <li>Plaid integration</li>
       <li>Authentication</li>
-      <li>Server-side write endpoints</li>
-      <li>Deployment</li>
+      <li>Multi-user isolation and authorization</li>
+      <li>Plaid webhook signature verification</li>
+      <li>Durable task queue for background agent runs</li>
+      <li>Live extension recommendation endpoint and integration</li>
     </ul>
   </div>
 </div>
 
 <div class="note">
-  <p class="note__l">On building the interface first</p>
-  <p>The fixtures were written to contain the awkward cases deliberately — a cap reached mid-cycle, two cards tied, a document that would not parse, a rate-limited source, an ambiguous merchant, an expired recommendation. Building the interface against those states first means the agents have a precise target to hit, and the failure modes were designed rather than discovered late.</p>
+  <p class="note__l">Fixture boundary</p>
+  <p>Fixtures remain as an explicit development fallback and awkward-state layout corpus. They are not the normal dashboard data source and are never used silently in production.</p>
 </div>
 
 <!-- ============================================================= 13 -->
@@ -626,14 +631,18 @@ mcc_map/{category}        Plaid taxonomy → our categories → issuer wording</
   <li><strong>Category mapping is maintained by hand.</strong> Plaid&rsquo;s taxonomy does not map one-to-one onto the codes issuer terms are written in.</li>
   <li><strong>Sandbox data only.</strong> No production financial connection, by design and by scope.</li>
   <li><strong>Single user.</strong> Authentication and multi-tenancy are designed for but not implemented.</li>
+  <li><strong>Reward simulation is not issuer-complete.</strong> Every card condition, minimum spend, channel restriction and statement-cycle boundary is not yet enforced transaction by transaction.</li>
+  <li><strong>ADK is experimental.</strong> The built-in orchestrator remains the default until persistence and output parity are proven.</li>
+  <li><strong>The extension is not live.</strong> Its detector and UI exist, but the displayed verdict is fixed demo data.</li>
+  <li><strong>Background jobs are in-process.</strong> FastAPI background tasks are not a durable Cloud Tasks or Pub/Sub queue.</li>
 </ul>
 
 <!-- ============================================================= 14 -->
-<h2 id="s14"><span class="n">14</span>Action plan</h2>
+<h2 id="s14"><span class="n">14</span>Original build plan</h2>
 
 <div class="internal">
-  <p class="note__l">Internal section</p>
-  <p>This section is a working plan for the team, not part of the architecture submission. Consider removing it from the copy sent to judges.</p>
+  <p class="note__l">Historical section</p>
+  <p>This is the original August build plan retained for context. Section 12, not the milestones below, is the source of truth for current implementation status.</p>
 </div>
 
 <p><strong>Two people. Twenty-three days. Both new to this stack.</strong> The plan below is shaped around one conviction: the way teams lose a hackathon is not by building too little, it is by having nothing that runs until the final week.</p>

@@ -1,4 +1,5 @@
 from datetime import date
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -208,6 +209,64 @@ def test_normal_token_exchange_stores_accounts_and_links_cards(monkeypatch):
     assert test_store.get_subdoc(main.UID, "wallet", "visa-card")["accountId"] == "account-1"
     assert main.plaid_items()[0]["institutionName"] == "Test Credit Union"
     assert main.plaid_items()[0]["institutionId"] == "ins-test"
+
+
+def test_sandbox_seed_creates_one_deterministic_credit_card(monkeypatch):
+    from app import main
+
+    captured_request = {}
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def to_dict(self):
+            return self.payload
+
+    class Client:
+        def sandbox_public_token_create(self, request):
+            captured_request.update(request.to_dict())
+            return Response({"public_token": "public-sandbox"})
+
+        def item_public_token_exchange(self, _request):
+            return Response({"item_id": "credit-item", "access_token": "credit-access"})
+
+        def accounts_get(self, _request):
+            return Response({"accounts": [{
+                "account_id": "credit-account",
+                "mask": "3333",
+                "name": "CardSense Credit Card",
+                "official_name": "CardSense Sandbox Rewards Credit Card",
+                "type": "credit",
+                "subtype": "credit card",
+            }]})
+
+    test_store = Store()
+    test_store.set_subdoc(main.UID, "wallet", "sandbox-card", {
+        "cardId": "sandbox-card", "name": "Sandbox Card", "last4": "3333",
+    })
+    test_store.set_subdoc(main.UID, "transactions", "old", {
+        "source": "plaid", "amount": 999,
+    })
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "get_plaid_client", lambda: Client())
+    monkeypatch.setattr(main.settings, "plaid_client_id", "client")
+    monkeypatch.setattr(main.settings, "plaid_secret", "secret")
+    monkeypatch.setattr(main.settings, "plaid_env", "sandbox")
+
+    result = main.plaid_sandbox_seed(main.LinkTokenIn(userId=main.UID))
+
+    options = captured_request["options"]
+    custom_user = json.loads(options["override_password"])
+    account = custom_user["override_accounts"][0]
+    assert options["override_username"] == "user_custom"
+    assert account["type"] == "credit"
+    assert account["subtype"] == "credit card"
+    assert account["meta"]["mask"] == "3333"
+    assert result["accounts"] == 1
+    assert test_store.get_subcollection(main.UID, "transactions") == []
+    assert test_store.get_subdoc(main.UID, "wallet", "sandbox-card")["accountId"] == "credit-account"
+    assert test_store.get_subdoc(main.UID, "plaid_items", "credit-item")["institutionName"] == "First Platypus Bank"
 
 
 def test_summary_measures_wallet_links_not_presence_of_plaid_account_id():

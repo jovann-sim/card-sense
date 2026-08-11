@@ -18,6 +18,10 @@ curl -X POST localhost:8080/api/v1/plaid/sync       -H 'Content-Type: applicatio
 `sandbox/seed` mints and exchanges a public token in one call, so none of this
 needs the Plaid Link UI. It refuses to run outside sandbox.
 
+The normal Plaid onboarding flow performs exactly one analysis run: Plaid sync
+returns the completed run and step 3 reuses it after saving the goal through a
+targeted projection. It does not queue a second identical five-agent run.
+
 ## What was fixed
 
 | Gap | Resolution |
@@ -77,3 +81,7 @@ local dataset for the demo.
 **3. Inferred MCCs are representative.** A detailed Plaid category is stronger
 than a primary-category fallback, but both are currently eligible for matching.
 Keep `mccSource` visible when diagnosing a surprising recommendation.
+
+**4. Sandbox security only.** The application uses a fixed `demo-user`, the
+Plaid webhook is not signature-verified, and access is not authenticated. Do
+not expose this flow to production accounts or multiple users yet.

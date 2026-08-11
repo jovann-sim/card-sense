@@ -14,7 +14,7 @@ from .agents.strategy import StrategyAgent, VALUATIONS
 from .models import Snapshot
 
 
-READ_MODEL_VERSION = 4
+READ_MODEL_VERSION = 5
 
 
 AGENTS = [
@@ -196,24 +196,33 @@ class Orchestrator:
             stage_started = perf_counter()
             self._start_stage(uid, run_id, "advisory", "Advisory", "advice", ["strategy_runs", "forecasts"])
             advice = self.advisory.run(strategy, forecast, wallet)
-            for item in advice:
-                item["impact"] = _numeric_advice_value(item.get("impact"))
-                item.setdefault("outcome", "open")
-                item.setdefault("pushedAt", self._now())
-                item.setdefault("predicted", item["impact"])
-                item.setdefault("window", item["impactWindow"])
-                self.store.set_subdoc(uid, "advice", item["id"], item)
-            self._log(uid, run_id, "advisory", "Advisory", "advice", ["strategy_runs", "advice"], duration_ms=round((perf_counter() - stage_started) * 1000))
+            published, expired, suppressed = self._replace_advice(
+                uid, run_id, advice,
+            )
+            self._log(
+                uid, run_id, "advisory", "Advisory", "advice",
+                ["strategy_runs", "forecasts", "advice"],
+                duration_ms=round((perf_counter() - stage_started) * 1000),
+                summary=(
+                    f"Published {published} recommendations for this run; "
+                    f"expired {expired} stale and preserved {suppressed} resolved outcomes."
+                ),
+            )
         else:
             self._start_stage(uid, run_id, "advisory", "Advisory", [], ["advice"])
+            expired = self._expire_open_advice(uid, run_id)
             self._log(
                 uid,
                 run_id,
                 "advisory",
                 "Advisory",
-                [],
-                ["advice"],
-                summary="Existing advice retained; deterministic state recalculated without a model call.",
+                "advice",
+                ["strategy_runs", "forecasts", "advice"],
+                degraded=[
+                    "Advice generation was skipped after strategy changed; "
+                    f"{expired} open recommendation(s) were expired rather than retained as current."
+                ],
+                summary="No current recommendations were published for this run.",
             )
         snapshot = self.project(uid, run_id)
         self.store.set_snapshot(uid, snapshot)
@@ -286,6 +295,15 @@ class Orchestrator:
         snapshot["planned"] = planned
         snapshot["wallet"] = wallet
         snapshot["catalog"] = project_catalog(self.store, uid, wallet)
+        activity = sorted(
+            self.store.get_subcollection(uid, "agent_runs"),
+            key=lambda item: item.get("startedAt", ""),
+        )[-50:]
+        last_run_id = self.store.get_user(uid).get("lastRunId")
+        if not last_run_id and activity:
+            last_run_id = activity[-1].get("runId")
+        snapshot["activity"] = activity
+        snapshot["agents"] = self._project_agents(activity, last_run_id)
         snapshot["totals"] = {
             **transaction_totals(transactions),
             "captured": float(snapshot.get("totals", {}).get("captured", 0)),
@@ -330,7 +348,11 @@ class Orchestrator:
             item for item in snapshot.get("recommendations", [])
             if item.get("id") != advice_id
         ]
-        if advice.get("outcome") == "open":
+        current_run_id = self.store.get_user(uid).get("lastRunId")
+        if (
+            advice.get("outcome") == "open"
+            and advice.get("runId") == current_run_id
+        ):
             recommendations.append(self._recommendation(advice))
 
         records = [
@@ -339,7 +361,7 @@ class Orchestrator:
         ]
         records.append({
             key: value for key, value in advice.items()
-            if key in {"id", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}
+            if key in {"id", "runId", "invalidatedByRunId", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}
         })
 
         snapshot["generatedAt"] = self._now()
@@ -365,8 +387,7 @@ class Orchestrator:
         )
         advice = self.store.get_subcollection(uid, "advice")
         activity = sorted(self.store.get_subcollection(uid, "agent_runs"), key=lambda item: item.get("startedAt", ""))[-50:]
-        latest = {entry["agent"]: entry for entry in activity if entry.get("runId") == run_id}
-        agents = [{"id": ident, "label": label, "status": latest.get(ident, {}).get("status", "ok"), "lastRunAt": latest.get(ident, {}).get("startedAt", now), **({"note": latest[ident]["detail"]} if latest.get(ident, {}).get("detail") else {})} for ident, label in AGENTS]
+        agents = self._project_agents(activity, run_id)
         cards = self.forecast.project_cards(transactions, wallet, rules)
         captured = strategy["captured"]
         goal = strategy.get("goal")
@@ -378,8 +399,41 @@ class Orchestrator:
             "captured": captured,
             "unclaimed": strategy["unclaimed"],
         }
-        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open"], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
+
+    @staticmethod
+    def _project_agents(activity, run_id):
+        """Describe only observed runs; an absent log is not a successful run."""
+        latest = {
+            entry["agent"]: entry
+            for entry in activity
+            if run_id and entry.get("runId") == run_id
+        }
+        agents = []
+        for ident, label in AGENTS:
+            entry = latest.get(ident)
+            if not entry:
+                agents.append({
+                    "id": ident,
+                    "label": label,
+                    "status": "not-run",
+                    "lastRunAt": None,
+                })
+                continue
+            agent = {
+                "id": ident,
+                "label": label,
+                "status": {
+                    "queued": "running",
+                    "failed": "degraded",
+                }.get(entry.get("status"), entry.get("status", "degraded")),
+                "lastRunAt": entry.get("startedAt"),
+            }
+            if entry.get("detail"):
+                agent["note"] = entry["detail"]
+            agents.append(agent)
+        return agents
 
     def _recheck_due(self, uid, wallet):
         """Reread the terms of any card whose recheck date has arrived.
@@ -486,15 +540,104 @@ class Orchestrator:
         acted = [a for a in advice if a.get("outcome") == "acted"]
         records = []
         for item in advice:
-            record = {key: value for key, value in item.items() if key in {"id", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}}
+            record = {key: value for key, value in item.items() if key in {"id", "runId", "invalidatedByRunId", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}}
             record["predicted"] = _numeric_advice_value(item.get("predicted"))
             if "actual" in record:
                 record["actual"] = _numeric_advice_value(record["actual"])
             records.append(record)
-        return {"taken": len(acted), "offered": len(advice), "earned": round(sum(_numeric_advice_value(a.get("actual")) for a in acted), 2), "missed": round(sum(_numeric_advice_value(a.get("predicted")) for a in advice if a.get("outcome") in {"dismissed", "expired"}), 2), "accuracyNote": "Actual earnings are recorded after recommendation windows close.", "records": records}
+        missed = [
+            item for item in advice
+            if item.get("outcome") == "dismissed"
+            or (
+                item.get("outcome") == "expired"
+                and not item.get("invalidatedByRunId")
+            )
+        ]
+        return {"taken": len(acted), "offered": len(advice), "earned": round(sum(_numeric_advice_value(a.get("actual")) for a in acted), 2), "missed": round(sum(_numeric_advice_value(a.get("predicted")) for a in missed), 2), "accuracyNote": "Actual earnings are recorded after recommendation windows close.", "records": records}
+
+    def _replace_advice(self, uid, run_id, generated):
+        """Publish one run's advice and retire open advice it no longer supports."""
+        now = self._now()
+        existing = {
+            item["id"]: item
+            for item in self.store.get_subcollection(uid, "advice")
+            if item.get("id")
+        }
+        generated_ids: set[str] = set()
+        published = suppressed = 0
+
+        for raw in generated:
+            item = dict(raw)
+            advice_id = item.get("id")
+            if not advice_id:
+                continue
+            generated_ids.add(advice_id)
+            previous = existing.get(advice_id)
+            # A stable recommendation the user already acted on or dismissed
+            # stays resolved. Do not let a later model call silently reopen it.
+            if (
+                previous
+                and previous.get("outcome") in {"acted", "dismissed"}
+                and previous.get("headline") == item.get("headline")
+            ):
+                suppressed += 1
+                continue
+
+            item["impact"] = _numeric_advice_value(item.get("impact"))
+            item["outcome"] = "open"
+            item["runId"] = run_id
+            item["pushedAt"] = (
+                previous.get("pushedAt") or now
+                if previous and previous.get("outcome") == "open"
+                else now
+            )
+            item["refreshedAt"] = now
+            item["resolvedAt"] = None
+            item["invalidatedByRunId"] = None
+            item["gapReason"] = None
+            item.setdefault("predicted", item["impact"])
+            item.setdefault("window", item.get("impactWindow", "per period"))
+            self.store.set_subdoc(uid, "advice", advice_id, item)
+            published += 1
+
+        expired = self._expire_open_advice(
+            uid,
+            run_id,
+            except_ids=generated_ids,
+            existing=existing.values(),
+            now=now,
+        )
+        return published, expired, suppressed
+
+    def _expire_open_advice(
+        self,
+        uid,
+        run_id,
+        *,
+        except_ids=None,
+        existing=None,
+        now=None,
+    ):
+        """Make unsupported advice historical instead of showing it as current."""
+        keep = set(except_ids or [])
+        rows = list(existing) if existing is not None else self.store.get_subcollection(uid, "advice")
+        resolved_at = now or self._now()
+        expired = 0
+        for item in rows:
+            advice_id = item.get("id")
+            if not advice_id or advice_id in keep or item.get("outcome") != "open":
+                continue
+            self.store.set_subdoc(uid, "advice", advice_id, {
+                "outcome": "expired",
+                "resolvedAt": resolved_at,
+                "invalidatedByRunId": run_id,
+                "gapReason": "A later strategy run no longer supported this recommendation.",
+            })
+            expired += 1
+        return expired
 
     def _recommendation(self, item):
-        recommendation = {key: value for key, value in item.items() if key in {"id", "urgency", "headline", "card", "tiedWith", "impact", "impactWindow", "deadline", "body", "trace"}}
+        recommendation = {key: value for key, value in item.items() if key in {"id", "runId", "urgency", "headline", "card", "tiedWith", "impact", "impactWindow", "deadline", "body", "trace"}}
         recommendation["impact"] = _numeric_advice_value(item.get("impact"))
         return recommendation
 

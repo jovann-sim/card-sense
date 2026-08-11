@@ -15,6 +15,8 @@ export function AgentRail({
   agents: AgentRun[];
   generatedAt: string;
 }) {
+  const hasRun = agents.some((agent) => agent.status !== "not-run");
+
   return (
     <header className="rail">
       <div className="shell rail__inner">
@@ -28,16 +30,24 @@ export function AgentRail({
               key={agent.id}
               className="agent"
               data-status={agent.status}
-              title={agent.note ?? `Last run ${timeOfDay(agent.lastRunAt)}`}
+              title={
+                agent.note ??
+                (agent.lastRunAt
+                  ? `Last run ${timeOfDay(agent.lastRunAt)}`
+                  : "Not run yet")
+              }
             >
               <span className="agent__dot" aria-hidden />
               {agent.label}
               {agent.status === "degraded" && " · degraded"}
+              {agent.status === "not-run" && " · not run"}
             </li>
           ))}
         </ul>
 
-        <p className="rail__stamp">Last run {timeOfDay(generatedAt)}</p>
+        <p className="rail__stamp">
+          {hasRun ? `Snapshot ${timeOfDay(generatedAt)}` : "No agent run yet"}
+        </p>
       </div>
 
       <div className="shell">

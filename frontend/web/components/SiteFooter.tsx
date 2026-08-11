@@ -2,6 +2,7 @@ import type { AgentRun } from "@/lib/types";
 
 export function SiteFooter({ agents }: { agents: AgentRun[] }) {
   const degraded = agents.filter((a) => a.status === "degraded");
+  const notRun = agents.filter((a) => a.status === "not-run");
 
   return (
     <footer className="footer">
@@ -15,7 +16,9 @@ export function SiteFooter({ agents }: { agents: AgentRun[] }) {
         <p className="footer__meta">
           {degraded.length > 0
             ? `${degraded.length} agent running degraded — ${degraded[0].note}`
-            : "All agents nominal."}
+            : notRun.length === agents.length
+              ? "Agents have not run yet."
+              : "All agents nominal."}
         </p>
       </div>
     </footer>

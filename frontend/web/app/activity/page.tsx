@@ -28,6 +28,7 @@ export default async function ActivityPage() {
   const snapshot = await getSnapshot();
   const days = groupByDay(snapshot.activity);
   const degraded = snapshot.activity.filter((e) => e.status === "degraded");
+  const hasActivity = snapshot.activity.length > 0;
 
   return (
     <main>
@@ -35,18 +36,41 @@ export default async function ActivityPage() {
         <p className="hero__eyebrow">Agent activity</p>
 
         <h1 className="hero__claim hero__claim--lead">
-          Five agents, running on their own schedule, writing to a shared store.
+          {hasActivity
+            ? "Five agents, running on their own schedule, writing to a shared store."
+            : "No agent run has been recorded yet."}
         </h1>
 
         <p className="hero__sub">
-          No agent calls another. Each one reads the collections it needs and
-          writes its own, so a failure degrades the output instead of breaking
-          the chain — as {degraded.length === 1 ? "the run" : "the runs"} below
-          {degraded.length === 1 ? " shows" : " show"}.
+          {hasActivity ? (
+            <>
+              No agent calls another. Each one reads the collections it needs
+              and writes its own, so a failure degrades the output instead of
+              breaking the chain. {degraded.length > 0
+                ? `${degraded.length} run ${degraded.length === 1 ? "entry shows" : "entries show"} degraded input below.`
+                : "Every recorded entry completed without a degraded status."}
+            </>
+          ) : (
+            <>
+              Connect or import transactions and start an analysis. Activity
+              will appear here only after the backend records an actual agent
+              execution.
+            </>
+          )}
         </p>
       </section>
 
       <div className="shell">
+        {!hasActivity && (
+          <section className="section">
+            <h2 className="section__label">Run history</h2>
+            <p className="empty-state">
+              Nothing has run yet. An empty history is no longer reported as a
+              successful five-agent run.
+            </p>
+          </section>
+        )}
+
         {days.map(([day, entries]) => (
           <section key={day} className="section">
             <h2 className="section__label">{day}</h2>
