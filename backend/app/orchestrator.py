@@ -5,7 +5,7 @@ from math import isfinite
 import uuid
 from time import perf_counter
 
-from .agents.advisory import AdvisoryAgent
+from .agents.advisory import MIN_IMPACT, AdvisoryAgent, _urgency
 from .agents.card_intelligence import CardIntelligenceAgent
 from .agents.forecast import ForecastAgent
 from .agents.ingestion import IngestionAgent, is_eligible_purchase
@@ -198,6 +198,11 @@ class Orchestrator:
             advice = self.advisory.run(strategy, forecast, wallet)
             for item in advice:
                 item["impact"] = _numeric_advice_value(item.get("impact"))
+                # Stamped so the projection can tell this run's advice from the
+                # last one's. Model-written ids vary between runs, so without
+                # this the collection grows every time instead of being
+                # replaced — twenty-four became thirty-seven in three runs.
+                item["runId"] = run_id
                 item.setdefault("outcome", "open")
                 item.setdefault("pushedAt", self._now())
                 item.setdefault("predicted", item["impact"])
@@ -398,7 +403,7 @@ class Orchestrator:
             "captured": captured,
             "unclaimed": strategy["unclaimed"],
         }
-        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": {"label": "Current period", "start": str(date.today().replace(day=1)), "end": str(date.today())}, "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open"], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": self._open_recommendations(advice, run_id), "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
     def _recheck_due(self, uid, wallet):
@@ -462,6 +467,58 @@ class Orchestrator:
             ).get("rules", [])
             for card in wallet
         }
+
+    def _open_recommendations(self, advice, run_id) -> list[dict]:
+        """This run's open advice, in the shape the contract promises.
+
+        Superseded advice stays in the store because the track record is built
+        from it, but showing it would stack every run's suggestions on top of
+        each other. Urgency is normalised here rather than only at generation,
+        so advice written before the contract was enforced still renders.
+        """
+        rows = [item for item in advice if item.get("outcome") == "open"]
+        current = [item for item in rows if item.get("runId") == run_id]
+        # Advice written before runId existed has no run to belong to; showing
+        # it is better than showing nothing at all.
+        chosen = current or [item for item in rows if not item.get("runId")]
+        priced = [
+            item for item in chosen
+            if abs(_numeric_advice_value(item.get("impact"))) >= MIN_IMPACT
+        ]
+        priced.sort(key=lambda item: abs(_numeric_advice_value(item.get("impact"))), reverse=True)
+        out = []
+        for item in priced:
+            row = self._recommendation(item)
+            row["urgency"] = _urgency(row.get("urgency"), row.get("impact"))
+            out.append(row)
+        return out
+
+    def _period(self, transactions) -> dict:
+        """The window the figures on this page actually cover.
+
+        It used to say "current period" and mean the calendar month, while
+        every total beside it priced the entire transaction history — a
+        dashboard reporting fifty-four thousand dollars of spending across
+        eleven days. The label now follows the data rather than the calendar,
+        because the alternative is a number nobody can defend when asked.
+        """
+        dates = sorted(
+            str(row["date"])[:10] for row in transactions
+            if row.get("date") and is_eligible_purchase(row)
+        )
+        if not dates:
+            today = str(date.today())
+            return {"label": "No transactions yet", "start": today, "end": today}
+
+        start, end = dates[0], dates[-1]
+        days = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+        if days <= 31:
+            label = f"Last {days} days"
+        elif days <= 92:
+            label = f"Last {round(days / 30.44)} months"
+        else:
+            label = f"{round(days / 30.44)} months to {date.fromisoformat(end).strftime('%d %b %Y')}"
+        return {"label": label, "start": start, "end": end, "days": days}
 
     def _leakage_rate(self, transactions, unclaimed) -> float:
         spend = sum(

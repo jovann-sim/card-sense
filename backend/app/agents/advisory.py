@@ -1,6 +1,40 @@
 from __future__ import annotations
 from .runtime import GeminiRuntime
 
+# Advice below this is noise dressed as insight, and a list full of it teaches
+# the user to ignore the list.
+MIN_IMPACT = 1.0
+MAX_ADVICE = 8
+
+# The read model promises exactly three urgencies. A model asked for them
+# returns "High", "Low", "medium" and several other things, none of which the
+# interface can style or sort — so they are mapped rather than trusted.
+_URGENCY_ALIASES = {
+    "act-now": "act-now", "act now": "act-now", "urgent": "act-now",
+    "high": "act-now", "critical": "act-now", "immediate": "act-now",
+    "this-week": "this-week", "this week": "this-week", "medium": "this-week",
+    "soon": "this-week", "moderate": "this-week",
+    "informational": "informational", "info": "informational", "low": "informational",
+    "fyi": "informational", "none": "informational",
+}
+
+
+def _numeric(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _urgency(value, impact=None) -> str:
+    """One of the three the contract allows, whatever the model said."""
+    mapped = _URGENCY_ALIASES.get(str(value or "").strip().lower())
+    if mapped:
+        return mapped
+    # Unrecognised: fall back to what the money says rather than to a guess.
+    return "act-now" if _numeric(impact) >= 25 else "this-week"
+
+
 class AdvisoryAgent:
     id="advisory"
     def __init__(self,runtime): self.runtime=runtime
@@ -151,10 +185,10 @@ class AdvisoryAgent:
             recommendations = fallback
 
         # Guarantee frontend contract
+        recommendations = [rec for rec in recommendations if isinstance(rec, dict)]
         for i, rec in enumerate(recommendations):
-            if not isinstance(rec, dict):
-                continue
             rec.setdefault("id", f"rec-{i}")
+            rec["urgency"] = _urgency(rec.get("urgency"), rec.get("impact"))
 
             rec.setdefault(
                 "urgency",
@@ -193,7 +227,16 @@ class AdvisoryAgent:
 
         # Setup actions are deterministic and must not be rewritten by the
         # model — they name a condition the terms actually state.
+        # Advice worth less than a dollar is noise dressed as insight. Twenty-nine
+        # recommendations, eleven of them worth under a dollar, train a user to
+        # ignore the list — which costs more than the pennies were worth.
+        recommendations = [
+            rec for rec in recommendations
+            if abs(_numeric(rec.get("impact"))) >= MIN_IMPACT
+        ]
+        recommendations.sort(key=lambda rec: abs(_numeric(rec.get("impact"))), reverse=True)
+
         # Routing advice last: it is context about spending that cannot move,
         # not an action competing with the ones that can.
-        return [*self.setup_actions(strategy, wallet), *recommendations,
+        return [*self.setup_actions(strategy, wallet), *recommendations[:MAX_ADVICE],
                 *self.routing_actions(strategy)]
