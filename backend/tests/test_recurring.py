@@ -284,3 +284,49 @@ def test_an_empty_account_projects_nothing_without_crashing():
     assert result["quality"] == "none"
     assert result["reliableMonths"] == 0
     assert result["months"] == [] or all(bucket["total"] == 0 for bucket in result["months"])
+
+
+# -- the committed half is not certain either -------------------------------
+
+def test_a_detected_commitment_carries_uncertainty():
+    """Treating a stream as certain claimed half a percent on a year's spend."""
+    rent = [charge(days, "GREYSTONE PROPERTY", 2200.0, "Rent", "6513") for days in (1, 31, 61)]
+
+    result = ForecastAgent().run(rent, [], today=TODAY, horizon_months=12)
+
+    assert result["variableSpend"] == 0.0
+    assert result["confidence"] > 0
+    # A year of rent is not knowable to within a few percent.
+    assert result["confidence"] / result["projectedSpend"] > 0.05
+
+
+def test_a_stream_seen_only_twice_widens_the_range_more_than_a_confirmed_one():
+    confirmed = [charge(days, "GREYSTONE", 900.0, "Rent", "6513") for days in (1, 31, 61)]
+    glimpsed = [charge(days, "GREYSTONE", 900.0, "Rent", "6513") for days in (1, 31)]
+    agent = ForecastAgent()
+
+    strong = agent.run(confirmed, [], today=TODAY, horizon_months=6)
+    weak = agent.run(glimpsed, [], today=TODAY, horizon_months=6)
+
+    assert strong["recurring"][0]["confidence"] == "high"
+    assert weak["recurring"][0]["confidence"] == "low"
+    assert weak["confidence"] > strong["confidence"]
+
+
+def test_the_committed_range_widens_with_the_horizon():
+    rent = [charge(days, "GREYSTONE", 900.0, "Rent", "6513") for days in (1, 31, 61)]
+    agent = ForecastAgent()
+
+    near = agent.run(rent, [], today=TODAY, horizon_months=1)
+    far = agent.run(rent, [], today=TODAY, horizon_months=12)
+
+    assert far["confidence"] / far["projectedSpend"] > near["confidence"] / near["projectedSpend"]
+
+
+def test_a_display_name_keeps_the_capitals_it_was_given():
+    """Stripping them turned "United Airlines" into "nited irlines"."""
+    transactions = [charge(days, "United Airlines", 500.0, "Air travel", "4511") for days in (1, 31, 61)]
+
+    stream = detect_streams(transactions, today=TODAY)[0]
+
+    assert stream["merchant"] == "United Airlines"

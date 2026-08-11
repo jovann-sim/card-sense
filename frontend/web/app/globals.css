@@ -2813,3 +2813,217 @@ body {
 .excluded__item[data-kind="opportunity"] .excluded__value { color: var(--brass-deep); }
 
 .excluded__what { max-width: 62ch; }
+
+/* ==========================================================================
+   FORECAST — horizon, month bars, recurring streams, category split
+
+   Three colours carry one idea: what is already committed (slate), what your
+   card choice can still act on (brass), and what you told us yourself
+   (verdigris). Brass stays the colour of money in play, as it is elsewhere.
+   ========================================================================== */
+
+.horizon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 1.75rem;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  width: fit-content;
+  overflow: hidden;
+}
+
+.horizon__option {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  padding: 0.55rem 1rem;
+  color: var(--slate);
+  text-decoration: none;
+  border-right: 1px solid var(--hairline);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.horizon__option:last-child { border-right: 0; }
+
+.horizon__option:hover { background: var(--brass-wash); color: var(--graphite); }
+
+.horizon__option[aria-current="page"] {
+  background: var(--graphite);
+  color: var(--paper);
+}
+
+/* Past the point the history supports, the option is still offered — refusing
+   would be its own kind of dishonesty — but it does not look like the others. */
+.horizon__option[data-beyond]:not([aria-current="page"]) {
+  color: var(--slate-soft);
+  font-style: italic;
+}
+
+.horizon__warn {
+  margin-top: 1rem;
+  max-width: 60ch;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--ember);
+  border-left: 2px solid var(--ember);
+  padding-left: 0.85rem;
+}
+
+.horizon__warn strong { font-weight: 600; }
+
+/* -- month bars ---------------------------------------------------------- */
+
+.mbar { list-style: none; margin: 1.25rem 0 0; padding: 0; }
+
+.mbar__row {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr 6rem 9rem;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.mbar__label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--slate);
+}
+
+.mbar__track {
+  display: flex;
+  height: 0.55rem;
+  background: var(--porcelain);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.mbar__seg { display: block; height: 100%; }
+.mbar__seg--recurring { background: var(--slate); }
+.mbar__seg--variable { background: var(--brass); }
+.mbar__seg--planned { background: var(--verdigris); }
+
+.mbar__figure { font-size: 0.95rem; text-align: right; color: var(--graphite); }
+
+.mbar__cum { font-size: 0.8rem; text-align: right; color: var(--slate); }
+.mbar__band { color: var(--slate-soft); }
+
+.mbar__key {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  font-size: 0.75rem;
+  color: var(--slate);
+}
+
+.mbar__swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  margin-left: 0.6rem;
+}
+
+.mbar__swatch:first-child { margin-left: 0; }
+.mbar__swatch--recurring { background: var(--slate); }
+.mbar__swatch--variable { background: var(--brass); }
+.mbar__swatch--planned { background: var(--verdigris); }
+.mbar__keynote { margin-left: auto; color: var(--slate-soft); font-style: italic; }
+
+/* -- recurring streams --------------------------------------------------- */
+
+.streams { list-style: none; margin: 1.25rem 0 0; padding: 0; }
+
+.streams__row {
+  display: grid;
+  grid-template-columns: 1fr 6rem 7rem 6rem;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.streams__merchant { font-weight: 500; color: var(--graphite); }
+
+.streams__meta {
+  font-size: 0.78rem;
+  color: var(--slate);
+  margin-top: 0.15rem;
+}
+
+.streams__amount { text-align: right; color: var(--graphite); }
+.streams__monthly { text-align: right; font-size: 0.85rem; color: var(--slate); }
+
+.streams__conf {
+  justify-self: end;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  color: var(--slate);
+}
+
+.streams__conf[data-level="high"] {
+  border-color: var(--verdigris-tint);
+  background: var(--verdigris-tint);
+  color: var(--verdigris);
+}
+
+.streams__conf[data-level="low"] {
+  border-color: var(--brass-tint);
+  background: var(--brass-wash);
+  color: var(--brass-deep);
+}
+
+/* -- category split ------------------------------------------------------ */
+
+.ftable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1.25rem;
+  font-size: 0.9rem;
+}
+
+.ftable th,
+.ftable td {
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+}
+
+.ftable thead th {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--slate);
+  font-weight: 400;
+}
+
+.ftable tbody th { font-weight: 500; color: var(--graphite); }
+.ftable__num { text-align: right; }
+
+.ftable__tag {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 400;
+  color: var(--slate);
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 720px) {
+  .mbar__row { grid-template-columns: 4.5rem 1fr 5.5rem; }
+  .mbar__cum { grid-column: 2 / -1; text-align: left; }
+  .streams__row { grid-template-columns: 1fr auto; row-gap: 0.35rem; }
+  .streams__monthly, .streams__conf { grid-column: 2; justify-self: end; }
+  .ftable { font-size: 0.82rem; }
+}

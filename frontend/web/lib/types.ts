@@ -148,16 +148,70 @@ export interface TimelineEntry {
   amount?: number;
 }
 
+export type Cadence =
+  | "weekly"
+  | "fortnightly"
+  | "monthly"
+  | "quarterly"
+  | "yearly";
+
+/** One month of the projection, with the running total to the end of it. */
+export interface ForecastMonth {
+  month: string;
+  label: string;
+  days: number;
+  variable: number;
+  recurring: number;
+  planned: number;
+  total: number;
+  cumulative: number;
+  cumulativeConfidence: number;
+}
+
+export interface ForecastCategory {
+  category: string;
+  mcc: string;
+  variable: number;
+  recurring: number;
+  planned: number;
+  projected: number;
+  monthly: number;
+  share: number;
+}
+
+/** Spending detected as repeating on a schedule, projected by billing date. */
+export interface RecurringStream {
+  merchant: string;
+  category: string | null;
+  cadence: Cadence;
+  amount: number;
+  monthlyAmount: number;
+  occurrences: number;
+  nextDue: ISODate;
+  confidence: "low" | "medium" | "high";
+}
+
 export interface Forecast {
   horizonDays: number;
+  horizonMonths: number;
+  /** History-derived spend: variable plus recurring, before declared plans. */
   baselineSpend: number;
+  variableSpend: number;
+  recurringSpend: number;
   plannedSpend: number;
   projectedSpend: number;
   historyDays: number;
   quality: "none" | "limited" | "good";
   /** Plus or minus, in dollars. Stated rather than hidden. */
   confidence: number;
+  /** How far out the history genuinely supports projecting. */
+  reliableMonths: number;
+  /** True when the chosen horizon reaches past that point. */
+  extrapolated: boolean;
   basis: string;
+  months: ForecastMonth[];
+  categories: ForecastCategory[];
+  recurring: RecurringStream[];
   timeline: TimelineEntry[];
   doNothingCost: number;
   doNothingWindow: string;

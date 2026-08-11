@@ -1,20 +1,33 @@
 import type { Metadata } from "next";
 import { ForecastView } from "@/components/ForecastView";
 import { money } from "@/lib/format";
-import { getSnapshot } from "@/lib/api";
+import { getForecast, getSnapshot, HORIZONS } from "@/lib/api";
 
 export const metadata: Metadata = {
   title: "CardSense — What's coming",
 };
 
-export default async function ForecastPage() {
+/** The horizon lives in the URL so a projection can be linked to and shared. */
+function horizonFrom(value: string | string[] | undefined): number {
+  const months = Number(Array.isArray(value) ? value[0] : value);
+  return HORIZONS.includes(months as (typeof HORIZONS)[number]) ? months : 1;
+}
+
+export default async function ForecastPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const months = horizonFrom((await searchParams).months);
   const snapshot = await getSnapshot();
-  const { forecast } = snapshot;
+  // Falls back to the snapshot's own projection if the re-projection fails, so
+  // a dead endpoint costs the horizon selector rather than the whole page.
+  const forecast = (await getForecast(months)) ?? snapshot.forecast;
 
   return (
     <main>
       <ForecastView
-        key={snapshot.generatedAt}
+        key={`${snapshot.generatedAt}-${forecast.horizonMonths}`}
         forecast={forecast}
         today={snapshot.generatedAt}
       />

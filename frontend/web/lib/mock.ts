@@ -337,17 +337,46 @@ export const snapshot: Snapshot = {
   /* ------------------------------------------------------------ forecast -- */
 
   forecast: {
-    horizonDays: 30,
+    horizonDays: 31,
+    horizonMonths: 1,
     baselineSpend: 3_420,
+    variableSpend: 2_180,
+    recurringSpend: 1_240,
     plannedSpend: 1_400,
     projectedSpend: 4_820,
     historyDays: 42,
     quality: "good",
     confidence: 610,
+    reliableMonths: 4,
+    extrapolated: false,
     basis:
       "Six weeks of transaction history, plus one event you declared. Not seasonality — there is not enough history yet to claim that.",
+    months: [
+      {
+        month: "2026-09",
+        label: "Sep 2026",
+        days: 31,
+        variable: 2_180,
+        recurring: 1_240,
+        planned: 1_400,
+        total: 4_820,
+        cumulative: 4_820,
+        cumulativeConfidence: 610,
+      },
+    ],
+    categories: [
+      { category: "Rent", mcc: "6513", variable: 0, recurring: 950, planned: 0, projected: 950, monthly: 933, share: 0.1971 },
+      { category: "Air travel", mcc: "4511", variable: 120, recurring: 0, planned: 700, projected: 820, monthly: 805, share: 0.1701 },
+      { category: "Dining", mcc: "5812", variable: 640, recurring: 0, planned: 0, projected: 640, monthly: 628, share: 0.1328 },
+      { category: "Groceries", mcc: "5411", variable: 520, recurring: 0, planned: 0, projected: 520, monthly: 511, share: 0.1079 },
+    ],
+    recurring: [
+      { merchant: "GREYSTONE PROPERTY", category: "Rent", cadence: "monthly", amount: 950, monthlyAmount: 950, occurrences: 3, nextDue: "2026-09-01", confidence: "high" },
+      { merchant: "CON EDISON", category: "Utilities", cadence: "monthly", amount: 118, monthlyAmount: 118, occurrences: 3, nextDue: "2026-09-04", confidence: "medium" },
+      { merchant: "NETFLIX", category: "Streaming", cadence: "monthly", amount: 15.49, monthlyAmount: 15.49, occurrences: 2, nextDue: "2026-09-06", confidence: "low" },
+    ],
     doNothingCost: 180,
-    doNothingWindow: "over the next 30 days",
+    doNothingWindow: "over the next month",
     timeline: [
       {
         date: "2026-08-11",

@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 
 import { snapshot as mockSnapshot } from "@/lib/mock";
-import type { Snapshot } from "@/lib/types";
+import type { Forecast, Snapshot } from "@/lib/types";
 import {
   SNAPSHOT_CACHE_TAG,
   SNAPSHOT_REVALIDATE_SECONDS,
@@ -58,6 +58,40 @@ export const getSnapshot = cache(async (): Promise<Snapshot> => {
     }
     const message = error instanceof Error ? error.message : "Unknown error";
     throw new Error(`Unable to load CardSense backend snapshot: ${message}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+/** Horizons the backend accepts, and the interface offers. */
+export const HORIZONS = [1, 3, 6, 12] as const;
+
+/** Re-project spending over a chosen horizon.
+ *
+ * Separate from the snapshot because the horizon is a view preference, not a
+ * fact about the account: switching from one month to twelve is arithmetic on
+ * data already held, and must not cost a run or a model call. Returns null on
+ * failure so the page can fall back to the snapshot's own forecast rather than
+ * failing whole.
+ */
+export const getForecast = cache(async (months: number): Promise<Forecast | null> => {
+  const baseUrl = process.env.CARDSENSE_API_URL ?? "http://localhost:8080";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/forecast?months=${months}`, {
+      headers: { Accept: "application/json" },
+      next: {
+        revalidate: SNAPSHOT_REVALIDATE_SECONDS,
+        tags: [SNAPSHOT_CACHE_TAG],
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as Forecast;
+    return typeof payload?.projectedSpend === "number" ? payload : null;
+  } catch {
+    return null;
   } finally {
     clearTimeout(timeout);
   }

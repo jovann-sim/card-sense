@@ -78,7 +78,10 @@ class ForecastAgent:
         planned_spend = sum(float(item.get("amount", 0)) for item in in_window)
         projected = max(0.0, baseline + planned_spend)
 
-        confidence = self._band(daily_sd, horizon_days, history_days, variable)
+        confidence = self._band(
+            self._variable_sd(daily_sd, horizon_days, history_days, variable),
+            self._recurring_sd(streams, as_of, end, months),
+        )
         quality = "none" if history_days == 0 else ("limited" if history_days < 14 else "good")
         reliable = self._reliable_months(history_days)
         leakage_rate = min(1.0, max(0.0, float(leakage_rate or 0)))
@@ -155,22 +158,59 @@ class ForecastAgent:
         samples = [daily[first + timedelta(days=offset)] for offset in range(history_days)]
         return history_days, sum(samples) / history_days, pstdev(samples) if len(samples) > 1 else 0.0
 
-    def _band(self, daily_sd: float, horizon_days: int, history_days: int, variable: float) -> float:
-        """An 80% range that widens with the horizon and with thin history.
+    # How wrong a detected stream's projected total can be, before the horizon
+    # is taken into account. Two charges is one interval of evidence; three
+    # regular charges at a stable amount is a great deal more.
+    STREAM_ERROR = {"high": 0.05, "medium": 0.12, "low": 0.25}
+
+    # Added per month, for the chance a commitment lapses or reprices. A year
+    # is long enough to move house, switch phone plans and cancel a gym.
+    STREAM_DRIFT_PER_MONTH = 0.02
+
+    def _variable_sd(self, daily_sd: float, horizon_days: int, history_days: int, variable: float) -> float:
+        """Uncertainty in the variable half, as a standard deviation.
 
         Two errors compound. Day-to-day variation grows with the square root of
         the horizon, which is the familiar term. But the daily mean was itself
         estimated from a finite history, and that error grows *linearly* with
         the horizon — so projecting a year from a month is wrong in a way that
         projecting a month from a month is not. Adding both variances gives
-        sd = σ·√(t + t²/n), and it is the second term that makes a twelve-month
-        band honestly enormous instead of quietly reassuring.
+        sd = σ·√(t + t²/n), and it is the second term that dominates far out.
         """
         if history_days == 0:
             return 0.0
-        observed = 1.28 * daily_sd * sqrt(horizon_days + horizon_days ** 2 / history_days)
-        floor = variable * (0.30 if history_days < 14 else 0.10)
+        observed = daily_sd * sqrt(horizon_days + horizon_days ** 2 / history_days)
+        floor = variable * (0.30 if history_days < 14 else 0.10) / 1.28
         return max(observed, floor)
+
+    def _recurring_sd(self, streams, start: date, end: date, months: int) -> float:
+        """Uncertainty in the committed half, which is not zero.
+
+        Treating a detected commitment as certain is what made an early version
+        of this claim a range of half a percent on a twelve-month projection —
+        more confident than the naive forecaster it replaced, and wrong. A
+        stream can be a false positive, its amount can move, and the longer the
+        horizon the likelier it simply stops.
+
+        Streams are combined in quadrature, which assumes they fail
+        independently. They do not entirely — moving house changes the rent and
+        the utilities together — so this is the optimistic end of honest.
+        """
+        variance = 0.0
+        for stream in streams:
+            projected = len(occurrences_between(stream, start, end)) * float(stream["amount"])
+            if projected <= 0:
+                continue
+            relative = (
+                self.STREAM_ERROR.get(stream.get("confidence"), 0.25)
+                + self.STREAM_DRIFT_PER_MONTH * months
+            )
+            variance += (projected * relative) ** 2
+        return sqrt(variance)
+
+    def _band(self, variable_sd: float, recurring_sd: float) -> float:
+        """An 80% range over both halves of the projection."""
+        return 1.28 * sqrt(variable_sd ** 2 + recurring_sd ** 2)
 
     def _reliable_months(self, history_days: int) -> int:
         """How far out the history genuinely supports projecting.
@@ -224,7 +264,10 @@ class ForecastAgent:
                 "total": round(total, 2),
                 "cumulative": round(cumulative, 2),
                 "cumulativeConfidence": round(
-                    self._band(daily_sd, elapsed, history_days, daily_mean * elapsed), 2
+                    self._band(
+                        self._variable_sd(daily_sd, elapsed, history_days, daily_mean * elapsed),
+                        self._recurring_sd(streams, as_of, finish, index + 1),
+                    ), 2
                 ),
             })
         return buckets

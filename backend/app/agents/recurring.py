@@ -27,6 +27,9 @@ CADENCES: list[tuple[str, int, int, float]] = [
 LAPSE_FACTOR = 1.8
 
 _NOISE = re.compile(r"[^a-z0-9 ]+")
+# The display form keeps the issuer's own casing, so its noise pattern has to
+# spare capitals — stripping them turned "United Airlines" into "nited irlines".
+_NOISE_ANY_CASE = re.compile(r"[^A-Za-z0-9 ]+")
 _HAS_DIGIT = re.compile(r"\d")
 
 
@@ -52,7 +55,7 @@ def display_merchant(name: str | None) -> str:
     "NETFLIX 0A9X" on the screen. Stripping the same tokens the key drops keeps
     it readable without inventing a brand name we were never given.
     """
-    tokens = _NOISE.sub(" ", str(name or "")).split()
+    tokens = _NOISE_ANY_CASE.sub(" ", str(name or "")).split()
     kept = [token for token in tokens if not _HAS_DIGIT.search(token)]
     return " ".join(kept or tokens) or str(name or "")
 
