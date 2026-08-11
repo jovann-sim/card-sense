@@ -68,7 +68,7 @@ export function ForecastView({
   const actionable = currentForecast.timeline.filter((e) => e.action).length;
   const months = currentForecast.horizonMonths;
   const peak = Math.max(1, ...currentForecast.months.map((m) => m.total));
-  const bills = currentForecast.recurring.filter((s) => s.kind === "bill");
+  const bills = currentForecast.recurring.filter((s) => s.kind !== "habit");
   const habits = currentForecast.recurring.filter((s) => s.kind === "habit");
   const commitment = bills.reduce((total, s) => total + s.monthlyAmount, 0);
 
