@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { connection } from "next/server";
 
 import { snapshot as mockSnapshot } from "@/lib/mock";
 import type { Snapshot } from "@/lib/types";
@@ -36,6 +37,11 @@ function isSnapshot(value: unknown): value is Snapshot {
 const SNAPSHOT_TIMEOUT_MS = 8_000;
 
 export const getSnapshot = cache(async (): Promise<Snapshot> => {
+  // The snapshot is runtime data, not an input to the frontend build. Without
+  // this boundary Next.js executes the fetch while prerendering and `next
+  // build` fails whenever the FastAPI service is not already reachable.
+  await connection();
+
   const baseUrl = process.env.CARDSENSE_API_URL ?? "http://localhost:8080";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);

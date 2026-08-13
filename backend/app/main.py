@@ -687,22 +687,36 @@ def plaid_sandbox_seed(body: LinkTokenIn):
     try:
         # The default Sandbox user can expose only a checking account, which
         # cannot be attributed to a rewards card. A custom user makes the seed
-        # useful and repeatable: one credit card, a stable mask, and generated
+        # useful and repeatable: two credit cards with stable masks and generated
         # transaction history controlled by a stable seed.
         custom_user = {
-            "seed": "cardsense-credit-card-v1",
-            "override_accounts": [{
-                "type": "credit",
-                "subtype": "credit card",
-                "currency": BASE_CURRENCY,
-                "starting_balance": 1500,
-                "meta": {
-                    "name": "CardSense Credit Card",
-                    "official_name": "CardSense Sandbox Rewards Credit Card",
-                    "mask": "3333",
-                    "limit": 10000,
+            "seed": "cardsense-credit-card-v2",
+            "override_accounts": [
+                {
+                    "type": "credit",
+                    "subtype": "credit card",
+                    "currency": BASE_CURRENCY,
+                    "starting_balance": 1500,
+                    "meta": {
+                        "name": "CardSense Credit Card",
+                        "official_name": "CardSense Sandbox Rewards Credit Card",
+                        "mask": "3333",
+                        "limit": 10000,
+                    },
                 },
-            }],
+                {
+                    "type": "credit",
+                    "subtype": "credit card",
+                    "currency": BASE_CURRENCY,
+                    "starting_balance": 800,
+                    "meta": {
+                        "name": "CardSense Credit Card 2",
+                        "official_name": "CardSense Sandbox Rewards Credit Card 2",
+                        "mask": "9999",
+                        "limit": 8000,
+                    },
+                },
+            ],
         }
         created = client.sandbox_public_token_create(SandboxPublicTokenCreateRequest(
             institution_id="ins_109508",  # First Platypus Bank, the standard sandbox institution

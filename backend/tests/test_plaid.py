@@ -211,7 +211,7 @@ def test_normal_token_exchange_stores_accounts_and_links_cards(monkeypatch):
     assert main.plaid_items()[0]["institutionId"] == "ins-test"
 
 
-def test_sandbox_seed_creates_one_deterministic_credit_card(monkeypatch):
+def test_sandbox_seed_creates_two_deterministic_credit_cards(monkeypatch):
     from app import main
 
     captured_request = {}
@@ -258,11 +258,16 @@ def test_sandbox_seed_creates_one_deterministic_credit_card(monkeypatch):
 
     options = captured_request["options"]
     custom_user = json.loads(options["override_password"])
-    account = custom_user["override_accounts"][0]
+    accounts = custom_user["override_accounts"]
+    account = accounts[0]
     assert options["override_username"] == "user_custom"
     assert account["type"] == "credit"
     assert account["subtype"] == "credit card"
     assert account["meta"]["mask"] == "3333"
+    assert len(accounts) == 2
+    assert accounts[1]["type"] == "credit"
+    assert accounts[1]["subtype"] == "credit card"
+    assert accounts[1]["meta"]["mask"] == "9999"
     assert result["accounts"] == 1
     assert test_store.get_subcollection(main.UID, "transactions") == []
     assert test_store.get_subdoc(main.UID, "wallet", "sandbox-card")["accountId"] == "credit-account"
