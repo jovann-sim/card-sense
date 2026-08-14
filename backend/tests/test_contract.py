@@ -192,7 +192,9 @@ def test_agent_run_replaces_stale_open_advice_by_run_id():
         },
         {
             "id": "dismissed", "urgency": "this-week",
-            "headline": "Already dismissed", "card": None, "impact": 3,
+            # Wording may change between Gemini calls. The stable semantic ID,
+            # not an exact headline match, preserves the user's resolution.
+            "headline": "Reworded but already dismissed", "card": None, "impact": 3,
             "impactWindow": "per period", "body": "Do not reopen.", "trace": [],
         },
     ]

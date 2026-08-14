@@ -578,7 +578,6 @@ class Orchestrator:
             if (
                 previous
                 and previous.get("outcome") in {"acted", "dismissed"}
-                and previous.get("headline") == item.get("headline")
             ):
                 suppressed += 1
                 continue

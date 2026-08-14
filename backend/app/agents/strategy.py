@@ -12,6 +12,22 @@ from ..valuations import VALUATIONS  # noqa: F401  (re-exported; orchestrator im
 UNCATEGORISED = {"uncategorised", "uncategorized", "unknown", ""}
 
 
+def cap_cycle_kind(rule) -> str | None:
+    """Normalise issuer/legacy cycle labels for cap accounting."""
+    if not isinstance(rule, dict) or rule.get("capSpend", rule.get("cap")) is None:
+        return None
+    label = str(rule.get("cycleLabel") or "").strip().lower()
+    if label in {"per month", "month", "monthly"}:
+        return "month"
+    if label in {"per quarter", "quarter", "quarterly"}:
+        return "quarter"
+    if label in {"per year", "year", "yearly", "annual", "annually"}:
+        return "year"
+    if label in {"per statement", "statement", "statement cycle", "per statement cycle"}:
+        return "statement"
+    return "unknown"
+
+
 def mcc_in(mcc: str, codes: list[str]) -> bool:
     """Whether an MCC appears in a list of individual codes or ranges."""
     for code in codes:
@@ -41,11 +57,24 @@ def rule_matches(rule, category, mcc=None) -> bool:
 def unmet_rule_conditions(rule) -> list[str]:
     if not isinstance(rule, dict):
         return []
-    blocking = {"category_selection", "banking_relationship", "enrolment", "new_customer"}
-    out = [condition.get("description") or condition.get("kind") for condition in rule.get("conditions") or []
-           if condition.get("kind") in blocking]
+    # The transaction feed cannot prove that the holder enrolled, met a spend
+    # threshold, made enough transactions, holds another banking product, or
+    # falls inside a promotion. Until CardSense stores explicit eligibility
+    # state, every extracted condition is blocking. Pricing it anyway turns a
+    # possible return into money the dashboard claims was available.
+    out = [
+        condition.get("description") or condition.get("kind")
+        for condition in rule.get("conditions") or []
+        if isinstance(condition, dict)
+    ]
     if rule.get("requiresSelection") and not out:
         out.append("This rate applies only to the category you nominate.")
+    if rule.get("minSpend") is not None:
+        out.append(f"This rate requires minimum spend of {float(rule['minSpend']):g} per cycle.")
+    if rule.get("exclusions"):
+        out.append("This rate has exclusions that cannot be verified from the transaction feed.")
+    if cap_cycle_kind(rule) == "statement":
+        out.append("This cap follows a statement cycle whose boundary is not available.")
     return out
 
 
@@ -75,7 +104,8 @@ class StrategyAgent:
             grouped[tx.get("category", "uncategorized")].append(tx)
 
         categories, total_captured, total_optimal, degraded = [], 0.0, 0.0, []
-        cap_spend = defaultdict(float)
+        optimal_cap_spend = defaultdict(float)
+        captured_cap_spend = defaultdict(float)
         for category, rows in grouped.items():
             spend = sum(float(row.get("amount", 0)) for row in rows)
             if spend <= 0:
@@ -90,49 +120,46 @@ class StrategyAgent:
             if not category or str(category).lower() in UNCATEGORISED:
                 continue
 
-            # A display category can contain several different MCCs. Price
-            # each net MCC bucket separately; using the first row's code for
-            # the whole category made a hotel purchase look like a flight.
-            segments = defaultdict(float)
+            # A display category can contain several MCCs, merchants and
+            # payment channels. Keep those eligibility facts in the segment;
+            # collapsing to MCC alone made merchant-only and online-only rates
+            # look applicable to every purchase in the category.
+            segments = {}
             for row in rows:
-                segments[str(row.get("mcc") or "") or None] += float(row.get("amount", 0))
+                key = (
+                    str(row.get("mcc") or "") or None,
+                    str(row.get("merchant") or "").strip().lower(),
+                    str(row.get("paymentChannel") or "").strip().lower(),
+                    str(row.get("currency") or "").strip().upper(),
+                    bool(row.get("contactless", False)),
+                    str(row.get("date") or "")[:10],
+                )
+                segment = segments.setdefault(key, {"amount": 0.0, "row": row})
+                segment["amount"] += float(row.get("amount", 0))
 
             optimal = 0.0
             winner_value = defaultdict(float)
-            representative_rule = None
-            tied_names: list[str] = []
-            for mcc, segment_spend in segments.items():
+            for segment in segments.values():
+                row = segment["row"]
+                mcc = str(row.get("mcc") or "") or None
+                segment_spend = segment["amount"]
                 if segment_spend <= 0:
                     continue
-                candidates = self._candidates(category, wallet, rules, mcc)
-                if candidates:
-                    top_rate = candidates[0][0]
-                    segment_ties = [card for rate, card, _ in candidates if abs(rate - top_rate) < 0.0001]
-                    for card in segment_ties:
-                        if card["name"] not in tied_names:
-                            tied_names.append(card["name"])
-                    winner_value[candidates[0][1]["name"]] += segment_spend * top_rate
-                    representative_rule = representative_rule or candidates[0][2]
-
-                # Allocate this MCC's spend through cap headroom, then to the
-                # next applicable rule/card.
-                remaining = segment_spend
-                for rate, card, rule in candidates:
-                    cap = rule.get("capSpend", rule.get("cap")) if isinstance(rule, dict) else None
-                    cap_key = (card["name"], rule.get("capGroup") or rule.get("id") or rule.get("categoryLabel"),
-                               rule.get("cycleLabel", ""))
-                    headroom = remaining if cap is None else max(0.0, float(cap) - cap_spend[cap_key])
-                    allocated = min(remaining, headroom)
-                    optimal += allocated * rate
-                    cap_spend[cap_key] += allocated
-                    remaining -= allocated
-                    if remaining <= 0:
-                        break
-                if remaining:
-                    optimal += remaining * 0.01
+                candidates = self._candidates(category, wallet, rules, mcc, row)
+                value, allocations = self._allocate(
+                    segment_spend, candidates, optimal_cap_spend, row,
+                )
+                optimal += value
+                for rate, card, _rule, allocated in allocations:
+                    winner_value[card["name"]] += allocated * rate
 
             best_name = max(winner_value, key=winner_value.get) if winner_value else None
             best = next((card for card in wallet if card.get("name") == best_name), None)
+            best_value = winner_value.get(best_name, 0) if best_name else 0
+            tied_names = [
+                name for name, value in winner_value.items()
+                if name != best_name and abs(value - best_value) < 0.0001
+            ]
 
             captured = 0.0
             flags, used = (["ambiguous-merchant"] if any(row.get("categoryAmbiguous") for row in rows) else []), set()
@@ -143,28 +170,41 @@ class StrategyAgent:
                     flags.append("rules-unverified")
                     continue
                 used.add(f"{card['name']} ••{card['last4']}")
-                matched = self._candidates(category, [card], rules, row.get("mcc"))
-                captured += float(row.get("amount", 0)) * (matched[0][0] if matched else 0.01)
+                matched = self._candidates(category, [card], rules, row.get("mcc"), row)
+                if not matched:
+                    flags.append("rules-unverified")
+                    degraded.append(
+                        f"{category}: no verified rule on {card['name']} matched this transaction; "
+                        "actual rewards exclude it."
+                    )
+                    continue
+                value, _allocations = self._allocate(
+                    float(row.get("amount", 0)), matched, captured_cap_spend, row,
+                )
+                captured += value
             if not used:
                 degraded.append(f"{category}: no transaction is associated with a held card; actual rewards are unavailable.")
             total_captured += captured
             total_optimal += optimal
             item = {
-                "mcc": ", ".join(sorted(mcc for mcc in segments if mcc)) or "—",
+                "mcc": ", ".join(sorted({str(row.get("mcc")) for row in rows if row.get("mcc")})) or "—",
                 "category": category, "spend": round(spend, 2),
                 "captured": round(captured, 2), "unclaimed": round(max(0, optimal - captured), 2),
                 "usedCard": ", ".join(sorted(used)) or "Unassigned", "bestCard": best["name"] if best else "No verified card",
             }
+            if "rules-unverified" in flags:
+                item["note"] = (
+                    "Actual rewards exclude transactions that are not mapped to a held card "
+                    "or do not match a verified rule."
+                )
             if flags:
                 item["flags"] = sorted(set(flags))
-                item["note"] = "Actual rewards exclude transactions not mapped to a held card."
-            conditional = self.unmet_conditions(representative_rule)
+            conditional = self._category_unmet_conditions(category, rows, wallet, rules)
             if conditional:
                 item["flags"] = sorted(set([*item.get("flags", []), "conditional-rate"]))
                 item["note"] = (item.get("note", "") + " " + conditional[0]).strip()
-            other_ties = [name for name in tied_names if name != best_name]
-            if other_ties:
-                item["note"] = (item.get("note", "") + " " + "Tied with " + ", ".join(other_ties) + ".").strip()
+            if tied_names:
+                item["note"] = (item.get("note", "") + " " + "Tied with " + ", ".join(tied_names) + ".").strip()
             categories.append(item)
         categories.sort(key=lambda item: item["unclaimed"], reverse=True)
         return {"categories": categories, "captured": round(total_captured, 2), "unclaimed": round(max(0, total_optimal-total_captured), 2), "degraded": degraded}
@@ -183,7 +223,7 @@ class StrategyAgent:
             out["fix"] = {"action": "Route eligible spending to the highest-value verified card.", "pacePerMonth": round(pace * 1.1, 2), "projectedAt": str(date.today() + timedelta(days=round(max(0, months * 30 / 1.1))))}
         return out
 
-    def _candidates(self, category, wallet, rules, mcc=None):
+    def _candidates(self, category, wallet, rules, mcc=None, transaction=None):
         """Rules that could pay for this spending, best first.
 
         Matching prefers the merchant category code, because a label match is
@@ -197,8 +237,124 @@ class StrategyAgent:
             for rule in rules.get(card.get("cardId"), []):
                 if not rule_matches(rule, category, mcc):
                     continue
+                if not self._rule_is_eligible(rule, transaction, card):
+                    continue
                 candidates.append((rule_rate(rule, card.get("track")), card, rule))
         return sorted(candidates, key=lambda item: item[0], reverse=True)
+
+    def _rule_is_eligible(self, rule, transaction, card) -> bool:
+        """Only price a rate whose requirements the transaction can prove."""
+        if unmet_rule_conditions(rule):
+            return False
+
+        row = transaction or {}
+        if rule.get("capSpend", rule.get("cap")) is not None and self._cap_period(rule, row) is None:
+            return False
+        merchants = [str(value).strip().lower() for value in rule.get("merchants") or [] if value]
+        if merchants:
+            merchant = str(row.get("merchant") or "").strip().lower()
+            if not merchant or not any(value in merchant or merchant in value for value in merchants):
+                return False
+
+        channels = {str(value).strip().lower().replace("-", "_").replace(" ", "_")
+                    for value in rule.get("channels") or [] if value}
+        channels.discard("any")
+        if channels and not self._channel_matches(channels, row, card):
+            return False
+        return True
+
+    def _channel_matches(self, channels, transaction, card) -> bool:
+        supplied = str(transaction.get("paymentChannel") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if "online" in channels and supplied == "online":
+            return True
+        if "in_store" in channels and supplied in {"in_store", "in_person"}:
+            return True
+        if "contactless" in channels and (
+            transaction.get("contactless") is True or supplied == "contactless"
+        ):
+            return True
+        if "foreign_currency" in channels:
+            transaction_currency = str(transaction.get("currency") or "").upper()
+            card_currency = str(card.get("currency") or "").upper()
+            if transaction_currency and card_currency and transaction_currency != card_currency:
+                return True
+        return False
+
+    def _allocate(self, amount, candidates, cap_spend, transaction=None):
+        """Price spend through verified cap headroom and return its allocation."""
+        if not candidates or amount == 0:
+            return 0.0, []
+        if amount < 0:
+            rate, card, rule = candidates[0]
+            key = self._cap_key(card, rule, transaction)
+            if rule.get("capSpend", rule.get("cap")) is not None:
+                cap_spend[key] = max(0.0, cap_spend[key] + amount)
+            return amount * rate, [(rate, card, rule, amount)]
+
+        remaining, value, allocations = amount, 0.0, []
+        for rate, card, rule in candidates:
+            cap = rule.get("capSpend", rule.get("cap"))
+            key = self._cap_key(card, rule, transaction)
+            headroom = remaining if cap is None else max(0.0, float(cap) - cap_spend[key])
+            allocated = min(remaining, headroom)
+            if allocated <= 0:
+                continue
+            value += allocated * rate
+            cap_spend[key] += allocated
+            allocations.append((rate, card, rule, allocated))
+            remaining -= allocated
+            if remaining <= 0:
+                break
+        return value, allocations
+
+    def _cap_key(self, card, rule, transaction=None):
+        return (
+            card.get("cardId") or card.get("name"),
+            rule.get("capGroup") or rule.get("id") or rule.get("categoryLabel"),
+            rule.get("cycleLabel", ""),
+            self._cap_period(rule, transaction or {}),
+        )
+
+    def _cap_period(self, rule, transaction) -> str | None:
+        """Calendar bucket in which this rule's spend cap is consumed."""
+        if rule.get("capSpend", rule.get("cap")) is None:
+            return "uncapped"
+        kind = cap_cycle_kind(rule)
+        if kind in {"statement", "unknown"}:
+            return None
+        try:
+            when = date.fromisoformat(str(transaction.get("date") or "")[:10])
+        except (TypeError, ValueError):
+            return None
+        if kind == "month":
+            return f"{when.year:04d}-{when.month:02d}"
+        if kind == "quarter":
+            return f"{when.year:04d}-Q{((when.month - 1) // 3) + 1}"
+        if kind == "year":
+            return f"{when.year:04d}"
+        return None
+
+    def _category_unmet_conditions(self, category, rows, wallet, rules):
+        """Explain higher rates that were excluded instead of pricing them."""
+        reasons = []
+        for card in wallet:
+            if card.get("parseStatus") != "parsed":
+                continue
+            for rule in rules.get(card.get("cardId"), []):
+                if not any(rule_matches(rule, category, row.get("mcc")) for row in rows):
+                    continue
+                for reason in unmet_rule_conditions(rule):
+                    if reason not in reasons:
+                        reasons.append(reason)
+                if (
+                    rule.get("capSpend", rule.get("cap")) is not None
+                    and any(self._cap_period(rule, row) is None for row in rows)
+                    and cap_cycle_kind(rule) != "statement"
+                ):
+                    reason = "This cap has no supported cycle or transaction date, so its remaining headroom is unverified."
+                    if reason not in reasons:
+                        reasons.append(reason)
+        return reasons
 
     def _matches(self, rule, category, mcc=None):
         return rule_matches(rule, category, mcc)

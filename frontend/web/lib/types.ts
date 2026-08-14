@@ -65,6 +65,7 @@ export interface Totals {
 export type CategoryFlag =
   | "multi-mcc"
   | "ambiguous-merchant"
+  | "conditional-rate"
   | "rules-unverified";
 
 export interface CategoryLeak {

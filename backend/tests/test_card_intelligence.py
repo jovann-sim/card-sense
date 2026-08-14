@@ -215,13 +215,17 @@ def test_strategy_allocates_against_the_spend_equivalent_cap():
     wallet = [{"cardId": "c1", "name": "Card", "last4": "1111", "parseStatus": "parsed",
                "track": "cashback", "accountId": "a1"}]
     rules = {"c1": [rule(categoryLabel="Dining", rateValue=5, rateUnit="percent",
-                         cap=60, capType="reward", capSpend=1200.0, valuePerDollar=0.05),
+                         cap=60, capType="reward", capSpend=1200.0, valuePerDollar=0.05,
+                         cycleLabel="per month"),
                     rule(categoryLabel="Dining", rateValue=0.3, rateUnit="percent",
                          valuePerDollar=0.003)]}
-    transactions = [{"category": "Dining", "amount": 2000, "accountId": "a1"}]
+    transactions = [{
+        "category": "Dining", "amount": 2000, "accountId": "a1", "date": "2026-08-10",
+    }]
     result = strategy.run(transactions, wallet, rules)
     # $1,200 earns 5% and the remaining $800 falls to 0.3%.
-    assert result["categories"][0]["captured"] == pytest.approx(100.0, abs=0.01)
+    assert result["categories"][0]["captured"] == pytest.approx(62.4, abs=0.01)
+    assert result["categories"][0]["unclaimed"] == pytest.approx(0.0, abs=0.01)
 
 
 def test_a_reward_cap_is_republished_as_spend_on_the_rule():

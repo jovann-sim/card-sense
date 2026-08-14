@@ -6,6 +6,7 @@ import { LedgerBar } from "./LedgerBar";
 const FLAG_LABEL: Record<CategoryFlag, string> = {
   "multi-mcc": "Split across categories",
   "ambiguous-merchant": "Merchant unclear",
+  "conditional-rate": "Eligibility unverified",
   "rules-unverified": "Rules unread",
 };
 
