@@ -166,6 +166,51 @@ def test_an_already_linked_card_is_left_alone(monkeypatch):
     assert main.link_accounts_to_cards("demo-user") == []
 
 
+def test_an_explicitly_unlinked_card_is_not_auto_linked_again(monkeypatch):
+    from app import main
+    from app.store import Store
+
+    test_store = Store()
+    monkeypatch.setattr(main, "store", test_store)
+    test_store.set_subdoc("demo-user", "plaid_accounts", "acc-4", {
+        "id": "acc-4", "mask": "3333", "type": "credit", "subtype": "credit card"})
+    test_store.set_subdoc("demo-user", "wallet", "visa-card", {
+        "cardId": "visa-card", "name": "Card", "last4": "3333",
+        "accountId": None, "accountAutoLinkDisabled": True})
+
+    assert main.link_accounts_to_cards("demo-user") == []
+    assert test_store.get_subdoc("demo-user", "wallet", "visa-card")["accountId"] is None
+
+
+def test_unlink_card_keeps_plaid_account_and_transactions(monkeypatch):
+    from app import main
+    from app.store import Store
+
+    test_store = Store()
+    test_store.set_subdoc(main.UID, "plaid_accounts", "acc-5", {
+        "id": "acc-5", "mask": "3333", "type": "credit", "subtype": "credit card"})
+    test_store.set_subdoc(main.UID, "transactions", "tx-1", {
+        "id": "tx-1", "source": "plaid", "accountId": "acc-5", "amount": 25})
+    test_store.set_subdoc(main.UID, "wallet", "visa-card", {
+        "cardId": "visa-card", "name": "Card", "last4": "3333", "accountId": "acc-5"})
+
+    class StubOrchestrator:
+        def run(self, uid, _request):
+            return "run", {"wallet": test_store.get_wallet(uid)}
+
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "orch", StubOrchestrator())
+
+    result = main.unlink_card_account("visa-card")
+
+    card = test_store.get_subdoc(main.UID, "wallet", "visa-card")
+    assert card["accountId"] is None
+    assert card["accountAutoLinkDisabled"] is True
+    assert result["card"] == card
+    assert test_store.get_subdoc(main.UID, "plaid_accounts", "acc-5") is not None
+    assert test_store.get_subdoc(main.UID, "transactions", "tx-1") is not None
+
+
 def test_normal_token_exchange_stores_accounts_and_links_cards(monkeypatch):
     """The browser Link path must do the same account work as sandbox/seed."""
     from app import main

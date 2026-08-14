@@ -264,7 +264,9 @@ function Wallet({
                 disabled={linking === (card.cardId ?? card.walletId)}
                 onChange={(event) => onLinkAccount(card, event.target.value)}
               >
-                <option value="">Choose a Plaid credit account</option>
+                <option value="">
+                  {card.accountId ? "Disconnect transaction account" : "Choose a Plaid credit account"}
+                </option>
                 {accounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {account.name || account.officialName || "Credit account"}
@@ -601,23 +603,25 @@ export function CardsView({
 
   async function linkAccount(card: CardDetail, accountId: string) {
     const cardId = card.cardId ?? card.walletId ?? card.id;
-    if (!cardId || !accountId) return;
+    if (!cardId) return;
     setRequestError(null);
     setLinkingId(cardId);
     try {
       const response = await api<{ card: CardDetail; snapshot: Snapshot }>(
         `/api/v1/cards/${encodeURIComponent(cardId)}/link-account`,
-        { method: "POST", body: JSON.stringify({ accountId }) },
+        accountId
+          ? { method: "POST", body: JSON.stringify({ accountId }) }
+          : { method: "DELETE" },
       );
       setWallet(response.snapshot.wallet);
       setAccounts((current) => current.map((account) => ({
         ...account,
-        linkedCard: account.id === accountId ? card.name :
+        linkedCard: accountId && account.id === accountId ? card.name :
           account.linkedCard === card.name ? null : account.linkedCard,
       })));
       router.refresh();
     } catch (error) {
-      setRequestError(error instanceof Error ? error.message : "Unable to link that account.");
+      setRequestError(error instanceof Error ? error.message : "Unable to update that transaction account.");
     } finally {
       setLinkingId(null);
     }

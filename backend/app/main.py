@@ -145,7 +145,7 @@ def link_accounts_to_cards(uid: str) -> list[dict]:
     linked = []
     claimed = {card["accountId"] for card in store.get_wallet(uid) if card.get("accountId")}
     for card in store.get_wallet(uid):
-        if card.get("accountId"):
+        if card.get("accountId") or card.get("accountAutoLinkDisabled"):
             continue
         matches = [
             account for account in accounts
@@ -440,6 +440,7 @@ def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
         "track": card["track"],
         "cardId": card_id,
         "accountId": card.get("accountId"),
+        "accountAutoLinkDisabled": card.get("accountAutoLinkDisabled", False),
         "rules": rules,
         "characteristics": parsed.get("characteristics", {}),
         # The card's own billing currency. Rendered rather than converted.
@@ -546,8 +547,28 @@ def link_card_account(card_id: str, body: dict):
     if linked_elsewhere:
         raise HTTPException(409, f"That account is already linked to {linked_elsewhere['name']}")
 
-    store.set_subdoc(UID, "wallet", card_id, {"accountId": account_id})
+    store.set_subdoc(UID, "wallet", card_id, {
+        "accountId": account_id,
+        "accountAutoLinkDisabled": False,
+    })
     _, snap = orch.run(UID, "Recalculate after linking an account")
+    return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
+
+
+@app.delete("/api/v1/cards/{card_id}/link-account", response_model=CardResponse)
+def unlink_card_account(card_id: str):
+    """Detach transaction attribution without deleting the Plaid account or transactions."""
+    card = store.get_subdoc(UID, "wallet", card_id)
+    if not card:
+        raise HTTPException(404, "Card not found")
+
+    store.set_subdoc(UID, "wallet", card_id, {
+        "accountId": None,
+        # A future Plaid sync still runs mask-based linking. Remember that this
+        # empty link was chosen deliberately instead of immediately undoing it.
+        "accountAutoLinkDisabled": True,
+    })
+    _, snap = orch.run(UID, "Recalculate after unlinking an account")
     return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
 
 

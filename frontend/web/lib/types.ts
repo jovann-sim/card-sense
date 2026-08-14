@@ -315,6 +315,8 @@ export interface CardDetail {
   id?: string;
   /** Plaid credit account whose transactions were made on this card. */
   accountId?: string | null;
+  /** Prevent mask matching from undoing an explicit account disconnection. */
+  accountAutoLinkDisabled?: boolean;
   name: string;
   last4: string;
   network: string;
