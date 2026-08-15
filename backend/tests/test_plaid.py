@@ -299,7 +299,10 @@ def test_sandbox_seed_creates_two_deterministic_credit_cards(monkeypatch):
     monkeypatch.setattr(main.settings, "plaid_secret", "secret")
     monkeypatch.setattr(main.settings, "plaid_env", "sandbox")
 
-    result = main.plaid_sandbox_seed(main.LinkTokenIn(userId=main.UID))
+    result = main.plaid_sandbox_seed(
+        main.LinkTokenIn(userId=main.UID),
+        x_internal_secret=main.settings.internal_run_secret,
+    )
 
     options = captured_request["options"]
     custom_user = json.loads(options["override_password"])

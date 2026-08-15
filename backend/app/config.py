@@ -68,7 +68,17 @@ class Settings(BaseSettings):
         # Only Firestore is genuinely required to leave demo mode. Plaid and
         # Gemini gate themselves on their own credentials.
         required = {"GOOGLE_CLOUD_PROJECT": self.google_cloud_project}
-        return [f"{key} is required when DEMO_MODE=false" for key, value in required.items() if not value]
+        errors = [f"{key} is required when DEMO_MODE=false" for key, value in required.items() if not value]
+
+        # The administrative endpoints — wiping and reseeding the account — are
+        # gated on this secret. Shipping the placeholder would leave that gate
+        # open to anyone who has read the repository, which is everyone.
+        if self.internal_run_secret in {"", "change-me"}:
+            errors.append(
+                "INTERNAL_RUN_SECRET must be set to something other than the default "
+                "when DEMO_MODE=false; the demo-reset and seeding endpoints depend on it"
+            )
+        return errors
 
 
 settings = Settings()

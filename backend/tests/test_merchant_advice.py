@@ -119,3 +119,44 @@ def test_the_verdict_never_contains_a_card_number():
     verdict = advise("https://www.instacart.com")
     assert len(verdict["card"]["last4"]) == 4
     assert "pan" not in verdict and "cardNumber" not in verdict
+
+
+# -- what a public deployment may be asked to do ----------------------------
+
+def test_seeding_endpoints_refuse_an_unauthorised_caller():
+    """The service is deployed unauthenticated so the extension can reach it.
+
+    That is fine for reading and not fine for an endpoint that wipes every
+    transaction: anyone who found the URL could empty the demo halfway through
+    it being judged.
+    """
+    import fastapi
+    from app import main
+
+    for call in (
+        lambda: main.seed_realistic_demo(months=12, x_internal_secret="wrong"),
+        lambda: main.seed_catalog(x_internal_secret=None),
+        lambda: main.plaid_sandbox_seed(main.LinkTokenIn(), x_internal_secret="wrong"),
+    ):
+        with pytest.raises(fastapi.HTTPException) as raised:
+            call()
+        assert raised.value.status_code == 401
+
+
+def test_real_mode_refuses_to_boot_on_the_placeholder_secret():
+    """Shipping the default would leave the gate open to anyone who read the repo."""
+    from app.config import Settings
+
+    errors = Settings(demo_mode=False, google_cloud_project="p",
+                      internal_run_secret="change-me").real_mode_errors()
+    assert any("INTERNAL_RUN_SECRET" in error for error in errors)
+
+    assert Settings(demo_mode=False, google_cloud_project="p",
+                    internal_run_secret="a-real-one").real_mode_errors() == []
+
+
+def test_demo_mode_still_boots_without_ceremony():
+    """A laptop with no credentials must stay one command away from running."""
+    from app.config import Settings
+
+    assert Settings(demo_mode=True).real_mode_errors() == []

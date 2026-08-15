@@ -50,10 +50,22 @@ gcloud services enable secretmanager.googleapis.com && printf '%s' 'YOUR_PLAID_S
 gcloud secrets add-iam-policy-binding plaid-secret --member="serviceAccount:cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
 ```
 
+The administrative endpoints — wiping and reseeding the account — are gated on a
+shared secret, and the app refuses to start in real mode while that secret is
+still the placeholder. Generate one:
+
+```bash
+printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create cardsense-internal --data-file=-
+```
+
+```bash
+gcloud secrets add-iam-policy-binding cardsense-internal --member="serviceAccount:cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
+```
+
 Then deploy. This builds the Dockerfile in `backend/` and runs it:
 
 ```bash
-gcloud run deploy cardsense-api --source . --region us-central1 --allow-unauthenticated --service-account cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com --set-secrets PLAID_SECRET=plaid-secret:latest --set-env-vars DEMO_MODE=false,GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e,GOOGLE_CLOUD_LOCATION=global,FIRESTORE_DATABASE=all-things-agentic,FINANCE_AGENT_MODEL=gemini-2.5-flash,PLAID_CLIENT_ID=6a79aafc2df7e2000d7d2d7c,PLAID_ENV=sandbox --memory 1Gi --timeout 300 --min-instances 1
+gcloud run deploy cardsense-api --source . --region us-central1 --allow-unauthenticated --service-account cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com --set-secrets PLAID_SECRET=plaid-secret:latest,INTERNAL_RUN_SECRET=cardsense-internal:latest --set-env-vars DEMO_MODE=false,GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e,GOOGLE_CLOUD_LOCATION=global,FIRESTORE_DATABASE=all-things-agentic,FINANCE_AGENT_MODEL=gemini-2.5-flash,PLAID_CLIENT_ID=6a79aafc2df7e2000d7d2d7c,PLAID_ENV=sandbox --memory 1Gi --timeout 300 --min-instances 1
 ```
 
 Two of those flags matter more than they look:
@@ -101,15 +113,32 @@ gcloud run services update cardsense-api --region us-central1 --update-env-vars 
 ## 4. Seed the deployed account
 
 Firestore is shared with your local machine, so the data is already there. If
-you want to reset it to the twelve-month demo set:
+you want to reset it to the twelve-month demo set, you need the secret you just
+generated — these endpoints are gated precisely so a stranger cannot call them:
 
 ```bash
-curl -X POST "$(gcloud run services describe cardsense-api --region us-central1 --format='value(status.url)')/api/v1/demo/seed-realistic?months=12"
+export CS_URL="$(gcloud run services describe cardsense-api --region us-central1 --format='value(status.url)')" && export CS_SECRET="$(gcloud secrets versions access latest --secret=cardsense-internal)"
 ```
 
 ```bash
-curl -X POST "$(gcloud run services describe cardsense-api --region us-central1 --format='value(status.url)')/api/v1/catalog/seed"
+curl -X POST "$CS_URL/api/v1/demo/seed-realistic?months=12" -H "x-internal-secret: $CS_SECRET"
 ```
+
+```bash
+curl -X POST "$CS_URL/api/v1/catalog/seed" -H "x-internal-secret: $CS_SECRET"
+```
+
+## 5. Before you show it to anyone
+
+- **Rotate the Plaid secret.** The one in use has been pasted into a chat log.
+  Roll it in the Plaid dashboard and update the Secret Manager version.
+- **The service is deployed unauthenticated**, because the frontend and the
+  extension have no login to present. Reads are open: anyone with the URL can
+  see the demo account's transactions and cards. That is acceptable for seeded
+  demo data and would not be for a real person's. Do not connect a real bank
+  account to the deployed instance.
+- **Check the deadline on any welcome bonus** in the demo data before judging,
+  since the tracker is date-driven and a window that closes will read as missed.
 
 ---
 

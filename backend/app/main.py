@@ -73,6 +73,18 @@ def _uid(user_id: str | None = None) -> str:
     return user_id or UID
 
 
+def _require_internal(secret: str | None) -> None:
+    """Guard the endpoints that change or destroy the account.
+
+    The service is deployed unauthenticated so the frontend and the extension
+    can reach it without a login the hackathon does not have. That is fine for
+    reading, and not fine for an endpoint that wipes every transaction — anyone
+    who found the URL could empty the demo halfway through it being judged.
+    """
+    if secret != settings.internal_run_secret:
+        raise HTTPException(401, "Unauthorized")
+
+
 def _plaid_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail=f"Plaid request failed: {exc}")
 
@@ -700,7 +712,8 @@ def plaid_link_token(body: LinkTokenIn):
 
 
 @app.post("/api/v1/plaid/sandbox/seed")
-def plaid_sandbox_seed(body: LinkTokenIn):
+def plaid_sandbox_seed(body: LinkTokenIn,
+                       x_internal_secret: str | None = Header(default=None)):
     """Create a sandbox Item and exchange it in one call.
 
     Plaid Link exists so a human can type bank credentials somewhere we never
@@ -708,6 +721,7 @@ def plaid_sandbox_seed(body: LinkTokenIn):
     public token directly — which means ingestion can be built and tested
     before any of the Link UI exists. Sandbox only, by construction.
     """
+    _require_internal(x_internal_secret)
     if not settings.use_plaid:
         raise HTTPException(400, "Plaid is not configured; set PLAID_CLIENT_ID and PLAID_SECRET.")
     if (settings.plaid_env or "sandbox").lower() != "sandbox":
@@ -1057,7 +1071,8 @@ def reset_demo(x_internal_secret: str | None = Header(default=None)):
 
 
 @app.post("/api/v1/demo/seed-realistic")
-def seed_realistic_demo(months: int = Query(12, ge=1, le=24)):
+def seed_realistic_demo(months: int = Query(12, ge=1, le=24),
+                        x_internal_secret: str | None = Header(default=None)):
     """Replace transactions with a year of plausible household spending.
 
     The Plaid sandbox replays one basket every thirty days at identical
@@ -1069,6 +1084,7 @@ def seed_realistic_demo(months: int = Query(12, ge=1, le=24)):
     Deterministic, so a demo can be rehearsed and a judge who reruns it sees
     what was described.
     """
+    _require_internal(x_internal_secret)
     from . import demo_data
 
     wallet = store.get_wallet(UID)
@@ -1143,7 +1159,7 @@ def advise_merchant(body: MerchantIn):
 
 
 @app.post("/api/v1/catalog/seed")
-def seed_catalog():
+def seed_catalog(x_internal_secret: str | None = Header(default=None)):
     """Write reference rules for cards the user does not hold.
 
     The simulator can only answer "would another card do better" if the other
@@ -1151,6 +1167,7 @@ def seed_catalog():
     produces that from an issuer's document; this is the same shape by hand, so
     the comparison works before every card has been read.
     """
+    _require_internal(x_internal_secret)
     from . import catalog_seed
 
     written = catalog_seed.seed(store, UID)
@@ -1171,7 +1188,10 @@ def scheduled_run(x_internal_secret: str | None = Header(default=None)):
 
 
 @app.post("/api/v1/import/csv")
-async def import_csv(file: UploadFile = File(...)):
+async def import_csv(file: UploadFile = File(...),
+                     x_internal_secret: str | None = Header(default=None)):
+    """Bulk import for a bank Plaid does not cover. Administrative."""
+    _require_internal(x_internal_secret)
     content = (await file.read()).decode("utf-8-sig")
     rows = orch.ingestion.import_csv_records(
         UID, store, csv.DictReader(io.StringIO(content)), file.filename or "statement.csv"
