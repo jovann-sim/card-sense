@@ -218,6 +218,10 @@ class Snapshot(BaseModel):
     routable: list[dict[str, Any]] = []
     # Bonus windows running now, and bonuses this spending would clear.
     welcome: list[WelcomeProgress] = []
+    # The single ranked answer to "what should I actually do": reassignments
+    # across held cards, cards worth acquiring, and the one place a routing fee
+    # pays for itself.
+    plan: dict[str, Any] = {}
     welcomeCandidates: list[WelcomeCandidate] = []
 
 

@@ -91,11 +91,12 @@ class AdvisoryAgent:
             })
         return actions
 
-    def run(self, strategy, forecast, wallet, welcome=None):
-        candidates = self._candidates(strategy, wallet)
+    def run(self, strategy, forecast, wallet, welcome=None, simulation=None):
+        planned = self.plan_actions(simulation)
+        candidates = [] if planned else self._candidates(strategy, wallet)
         if not candidates:
-            return [*self.welcome_actions(welcome or []), *self.setup_actions(strategy, wallet),
-                    *self.routing_actions(strategy, wallet)]
+            return [*self.welcome_actions(welcome or []), *planned,
+                    *self.setup_actions(strategy, wallet), *self.routing_actions(strategy, wallet)]
 
         wording = self._generate_wording(candidates, forecast)
         by_category = {
@@ -118,8 +119,37 @@ class AdvisoryAgent:
         # cards, impacts, windows and traces; Gemini controls wording only.
         # A bonus deadline outranks an optimisation: it expires, and the rest
         # can be taken tomorrow at no cost.
-        return [*self.welcome_actions(welcome or []), *self.setup_actions(strategy, wallet),
+        return [*self.welcome_actions(welcome or []), *planned, *self.setup_actions(strategy, wallet),
                 *recommendations, *self.routing_actions(strategy, wallet)]
+
+    def plan_actions(self, simulation):
+        """The simulator's ranked answer, as advice rather than a table.
+
+        These are deterministic: every figure comes from re-pricing the whole
+        history against a different set of cards. The model never sees them, so
+        it cannot round a number or invent a card.
+        """
+        actions = []
+        for step in (simulation or {}).get("steps", []):
+            if step["value"] <= 0:
+                continue
+            actions.append({
+                "id": f"rec-plan-{step['rank']}-{self._slug(step['kind'])}",
+                "urgency": "act-now" if step["rank"] == 1 else "this-week",
+                "headline": step["title"],
+                "card": {"name": step.get("card") or "your wallet", "last4": "0000"},
+                "impact": round(float(step["value"]), 2),
+                "impactWindow": step["valueWindow"],
+                "body": step["detail"],
+                "trace": [{
+                    "agent": "strategy",
+                    "detail": (
+                        "Re-priced the full transaction history against this arrangement "
+                        "of cards, respecting every cap and eligibility condition."
+                    ),
+                }],
+            })
+        return actions
 
     def welcome_actions(self, welcome):
         """A deadline that costs real money if it passes.

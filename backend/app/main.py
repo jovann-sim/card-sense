@@ -1100,6 +1100,22 @@ def seed_realistic_demo(months: int = Query(12, ge=1, le=24)):
     }
 
 
+@app.post("/api/v1/catalog/seed")
+def seed_catalog():
+    """Write reference rules for cards the user does not hold.
+
+    The simulator can only answer "would another card do better" if the other
+    cards are described in the same terms as the held ones. Card intelligence
+    produces that from an issuer's document; this is the same shape by hand, so
+    the comparison works before every card has been read.
+    """
+    from . import catalog_seed
+
+    written = catalog_seed.seed(store, UID)
+    return {"ok": True, "cardsSeeded": written,
+            "catalog": len(store.get_subcollection(UID, "catalog"))}
+
+
 @app.post("/api/v1/scheduler/run")
 def scheduled_run(x_internal_secret: str | None = Header(default=None)):
     if x_internal_secret != settings.internal_run_secret:

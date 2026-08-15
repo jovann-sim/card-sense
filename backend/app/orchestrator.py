@@ -12,6 +12,7 @@ from .agents.ingestion import IngestionAgent, is_eligible_purchase
 from .agents.runtime import GeminiRuntime
 from .agents.strategy import StrategyAgent, VALUATIONS
 from .models import Snapshot
+from .simulation import plan as build_plan
 from .welcome import qualify_catalog, rescue, track_held
 
 
@@ -199,7 +200,13 @@ class Orchestrator:
             # Bonus progress is computed before advice so a deadline can
             # outrank an optimisation in the list the user actually reads.
             welcome_now, _ = self._welcome(uid, wallet, transactions, forecast)
-            advice = self.advisory.run(strategy, forecast, wallet, welcome_now)
+            welcome_plan = build_plan(
+                self.strategy, transactions, wallet, rules,
+                self.store.get_subcollection(uid, "catalog"),
+                strategy.get("routable", []), welcome_now,
+                service_id=strategy.get("routingService"),
+            )
+            advice = self.advisory.run(strategy, forecast, wallet, welcome_now, welcome_plan)
             published, expired, suppressed = self._replace_advice(
                 uid, run_id, advice,
             )
@@ -424,7 +431,13 @@ class Orchestrator:
             "unclaimed": strategy["unclaimed"],
         }
         welcome_held, welcome_candidates = self._welcome(uid, wallet, transactions, forecast)
-        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "routable": strategy.get("routable", []), "welcome": welcome_held, "welcomeCandidates": welcome_candidates, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        catalog_rows = self.store.get_subcollection(uid, "catalog")
+        simulation = build_plan(
+            self.strategy, transactions, wallet, rules, catalog_rows,
+            strategy.get("routable", []), welcome_held,
+            service_id=strategy.get("routingService"),
+        )
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "routable": strategy.get("routable", []), "welcome": welcome_held, "welcomeCandidates": welcome_candidates, "plan": simulation, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
     @staticmethod
