@@ -91,10 +91,11 @@ class AdvisoryAgent:
             })
         return actions
 
-    def run(self, strategy, forecast, wallet):
+    def run(self, strategy, forecast, wallet, welcome=None):
         candidates = self._candidates(strategy, wallet)
         if not candidates:
-            return [*self.setup_actions(strategy, wallet), *self.routing_actions(strategy, wallet)]
+            return [*self.welcome_actions(welcome or []), *self.setup_actions(strategy, wallet),
+                    *self.routing_actions(strategy, wallet)]
 
         wording = self._generate_wording(candidates, forecast)
         by_category = {
@@ -115,8 +116,62 @@ class AdvisoryAgent:
         # Setup actions name extracted conditions and must never be rewritten by
         # a model. Financial recommendations retain deterministic identities,
         # cards, impacts, windows and traces; Gemini controls wording only.
-        return [*self.setup_actions(strategy, wallet), *recommendations,
-                *self.routing_actions(strategy, wallet)]
+        # A bonus deadline outranks an optimisation: it expires, and the rest
+        # can be taken tomorrow at no cost.
+        return [*self.welcome_actions(welcome or []), *self.setup_actions(strategy, wallet),
+                *recommendations, *self.routing_actions(strategy, wallet)]
+
+    def welcome_actions(self, welcome):
+        """A deadline that costs real money if it passes.
+
+        Everything else in this product is an optimisation the user can take or
+        leave. A welcome bonus is worth more than a year of ordinary earn and it
+        expires, so missing one by two hundred dollars of spending loses several
+        hundred. It gets the only genuine urgency in the list.
+        """
+        actions = []
+        for row in welcome:
+            if row["state"] in {"met", "missed"}:
+                continue
+            rescue = row.get("rescue")
+            urgency = "act-now" if row["state"] == "at-risk" else "this-week"
+            body = (
+                f"${row['qualifyingSpend']:,.2f} of the ${row['minSpend']:,.0f} minimum is done, "
+                f"leaving ${row['gap']:,.2f} in {row['daysLeft']} days. "
+                f"That needs ${row['perDayNeeded']:,.2f} a day against the "
+                f"${row['perDayCurrent']:,.2f} you are averaging."
+            )
+            if rescue and rescue["worthIt"]:
+                # The one case where paying a bill service its fee is a good
+                # trade rather than a losing one.
+                body += (
+                    f" Routing ${rescue['spendToRoute']:,.2f} of bills through "
+                    f"{rescue['serviceName']} would close it for ${rescue['fee']:,.2f} in fees "
+                    f"and still net ${rescue['net']:,.2f}."
+                )
+            actions.append({
+                "id": f"rec-welcome-{self._slug(row['card'])}",
+                "urgency": urgency,
+                "headline": (
+                    f"{row['card']}: ${row['gap']:,.0f} short of a ${row['valueUsd']:,.0f} bonus"
+                    if row["state"] == "at-risk" else
+                    f"{row['card']} is on track for its ${row['valueUsd']:,.0f} bonus"
+                ),
+                "card": {"name": row["card"], "last4": "0000"},
+                "impact": row["valueUsd"],
+                "impactWindow": f"one-time, by {row['deadline']}",
+                "deadline": row["deadline"],
+                "body": body,
+                "trace": [
+                    {"agent": "card-intelligence",
+                     "detail": f"Terms state {row['award']:,.0f} {row['unit']} after "
+                               f"${row['minSpend']:,.0f} of spend within {row['daysLeft'] + 0} days of opening."},
+                    {"agent": "ingestion",
+                     "detail": f"{row['transactions']} qualifying purchases on this card since "
+                               f"{row['openedAt']} total ${row['qualifyingSpend']:,.2f}."},
+                ],
+            })
+        return actions
 
     def routing_actions(self, strategy, wallet):
         """Advice about spending no card can reach directly.

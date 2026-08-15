@@ -12,6 +12,7 @@ from .agents.ingestion import IngestionAgent, is_eligible_purchase
 from .agents.runtime import GeminiRuntime
 from .agents.strategy import StrategyAgent, VALUATIONS
 from .models import Snapshot
+from .welcome import qualify_catalog, rescue, track_held
 
 
 READ_MODEL_VERSION = 5
@@ -195,7 +196,10 @@ class Orchestrator:
         if refresh_advice:
             stage_started = perf_counter()
             self._start_stage(uid, run_id, "advisory", "Advisory", "advice", ["strategy_runs", "forecasts"])
-            advice = self.advisory.run(strategy, forecast, wallet)
+            # Bonus progress is computed before advice so a deadline can
+            # outrank an optimisation in the list the user actually reads.
+            welcome_now, _ = self._welcome(uid, wallet, transactions, forecast)
+            advice = self.advisory.run(strategy, forecast, wallet, welcome_now)
             published, expired, suppressed = self._replace_advice(
                 uid, run_id, advice,
             )
@@ -419,7 +423,8 @@ class Orchestrator:
             "captured": captured,
             "unclaimed": strategy["unclaimed"],
         }
-        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        welcome_held, welcome_candidates = self._welcome(uid, wallet, transactions, forecast)
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "routable": strategy.get("routable", []), "welcome": welcome_held, "welcomeCandidates": welcome_candidates, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
     @staticmethod
@@ -516,6 +521,38 @@ class Orchestrator:
             ).get("rules", [])
             for card in wallet
         }
+
+    def _welcome(self, uid, wallet, transactions, forecast) -> tuple[list[dict], list[dict]]:
+        """Bonus windows running now, and bonuses this spending would clear.
+
+        A welcome bonus is usually worth more than a year of ordinary earn on
+        the same card, and unlike everything else in the product it expires. It
+        is the one figure here where a deadline genuinely matters, so it is
+        tracked against real qualifying spend rather than assumed met.
+        """
+        held, candidates = [], []
+        for card in wallet:
+            bonus = (self.store.get_global_doc("card_rules", card.get("cardId")) or {}).get("welcomeBonus")
+            if not bonus:
+                continue
+            progress = track_held(card, bonus, transactions)
+            if progress is None:
+                continue
+            progress["rescue"] = rescue(progress)
+            held.append(progress)
+
+        # What the user's own spending would do against bonuses they have not
+        # started. The question a catalog should answer is not what a card pays
+        # but whether they would actually reach the headline number.
+        monthly = float(forecast.get("projectedSpend") or 0) / max(1, forecast.get("horizonMonths") or 1)
+        held_names = {card.get("name") for card in wallet}
+        for item in self.store.get_subcollection(uid, "catalog"):
+            bonus = item.get("welcomeBonus")
+            if not bonus or item.get("name") in held_names:
+                continue
+            candidates.append(qualify_catalog(item, bonus, monthly))
+        candidates.sort(key=lambda row: (not row["qualifies"], -row["valueUsd"]))
+        return held, candidates
 
     def _period(self, transactions) -> dict:
         """The window the figures on this page actually cover.

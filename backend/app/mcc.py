@@ -84,10 +84,19 @@ def codes_for(label: str | None) -> list[str]:
 
     matched: list[str] = []
     for needle, key in ALIASES:
-        if needle in text:
-            for code in CATEGORY_MCC[key]:
-                if code not in matched:
-                    matched.append(code)
+        if needle not in text:
+            continue
+        for code in CATEGORY_MCC[key]:
+            if code not in matched:
+                matched.append(code)
+        # Consume the words this alias claimed, so a broader one cannot match
+        # the same characters again. The list is ordered specific-first for
+        # exactly this reason, but reading it without consuming meant "Air
+        # travel" also matched "travel" and inherited hotels and car rental —
+        # a rule that pays a bonus on flights would have paid it on a hotel.
+        # A genuinely compound label like "Dining and travel" still gets both,
+        # because the second alias matches words the first one left alone.
+        text = text.replace(needle, " ")
     return matched
 
 

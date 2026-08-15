@@ -41,6 +41,10 @@ class CardIn(BaseModel):
     annualFee: float = Field(default=0, ge=0)
     track: RewardTrack
     accountId: str | None = None
+    # A welcome bonus window runs from the day the account opened, so without
+    # this the deadline is unknowable and the tracker stays silent rather than
+    # guessing one.
+    openedAt: date | None = None
     termsText: str | None = None
     termsUrl: str | None = None
     rules: list[dict[str, Any]] | None = None
@@ -152,6 +156,43 @@ class ForecastOutput(BaseModel):
     doNothingWindow: str
 
 
+class WelcomeProgress(BaseModel):
+    cardId: str | None = None
+    card: str
+    state: Literal["met", "on-track", "at-risk", "missed"]
+    award: float
+    unit: str
+    valueUsd: float
+    minSpend: float
+    qualifyingSpend: float
+    transactions: int
+    gap: float
+    openedAt: str
+    deadline: str
+    daysLeft: int
+    perDayNeeded: float
+    perDayCurrent: float
+    excludes: list[str] = []
+    # Paying a fee to route bills is a losing trade for ordinary earn and a good
+    # one to save a bonus. Present only when it applies.
+    rescue: dict[str, Any] | None = None
+
+
+class WelcomeCandidate(BaseModel):
+    card: str
+    award: float
+    unit: str
+    valueUsd: float
+    minSpend: float
+    windowDays: int
+    projectedSpend: float
+    monthlySpend: float
+    qualifies: bool
+    shortfall: float
+    monthsToMinimum: float | None = None
+    monthsAllowed: float
+
+
 class Snapshot(BaseModel):
     readModelVersion: int = 5
     generatedAt: str
@@ -173,6 +214,11 @@ class Snapshot(BaseModel):
     catalog: list[dict[str, Any]]
     activity: list[dict[str, Any]]
     collections: list[dict[str, Any]]
+    # Spending no card can reach directly, priced against the services that can.
+    routable: list[dict[str, Any]] = []
+    # Bonus windows running now, and bonuses this spending would clear.
+    welcome: list[WelcomeProgress] = []
+    welcomeCandidates: list[WelcomeCandidate] = []
 
 
 class RunResponse(BaseModel):

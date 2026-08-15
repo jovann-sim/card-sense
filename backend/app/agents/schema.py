@@ -118,12 +118,33 @@ class Benefit(BaseModel):
     conditions: list[Condition] = Field(default_factory=list, description="What must happen to receive it")
 
 
+class WelcomeBonus(BaseModel):
+    """The one-time award for spending a minimum within a window of opening.
+
+    Not a Benefit and not a rule: it is earned once, it expires, and it is
+    usually worth more than a year of ordinary earn on the same card. A holder
+    who misses it by two hundred dollars has lost several hundred, so it is the
+    one figure in the product where a deadline genuinely matters.
+    """
+
+    award: float = Field(description="Raw units awarded, e.g. 60000 for 60,000 points")
+    unit: Literal["points", "miles", "cashback"] = "points"
+    minSpend: float = Field(description="Qualifying spend required, in the card's currency")
+    windowDays: int = Field(default=90, description="Days from account opening to meet the minimum")
+    # Fees, cash advances and balance transfers almost never count toward the
+    # minimum. Recording the exclusions is what stops the tracker telling
+    # someone they have qualified when the issuer disagrees.
+    excludes: list[str] = Field(default_factory=list, description="Spending the issuer says does not count")
+    note: str | None = None
+
+
 class ExtractionResult(BaseModel):
     rules: list[ExtractedRule] = Field(default_factory=list)
     characteristics: ExtractedCharacteristics = Field(default_factory=ExtractedCharacteristics)
     confidence: float = Field(default=0.0, ge=0, le=1)
     documentSummary: str | None = None
     benefits: list[Benefit] = Field(default_factory=list, description="Credits, waivers and access that are not per-dollar earn rates")
+    welcomeBonus: WelcomeBonus | None = Field(default=None, description="One-time sign-up award, if the document states one")
     unresolved: list[str] = Field(default_factory=list, description="Structures present in the document that could not be expressed in these fields")
 
 
@@ -223,6 +244,7 @@ CONDITIONS — record every qualifier as its own entry
 - enrolment: the holder must activate or register, including quarterly re-activation.
 - category_selection, new_customer, promotional_period, other.
 - requiresSelection is true when the holder must nominate the bonus category themselves. List the menu in selectableCategories if the document gives it.
+- welcomeBonus is the one-time sign-up award: "60,000 points after you spend $4,000 in the first 3 months" becomes award 60000, unit points, minSpend 4000, windowDays 90. Record it only when the document states one, and put anything the document excludes from qualifying spend into excludes. Do not confuse it with an ongoing bonus rate.
 
 CAPS
 - cap is the numeric limit and capType says what it limits. "5% on up to $600 spend monthly" -> cap 600, capType spend. "Up to $60 cash back monthly" -> cap 60, capType reward.
