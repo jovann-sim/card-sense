@@ -334,6 +334,95 @@ export const snapshot: Snapshot = {
   trackRationale:
     "Air travel and dining are two of your three largest categories, and both of your highest-earning cards accrue miles. Miles come out ahead of points by $3.90 a quarter — close enough that the real deciding factor is whether you will actually redeem for flights. If you would rather not think about redemption at all, take cash back and give up about $59 a quarter.",
 
+  /* ------------------------------------------------------------- routing -- */
+
+  routable: [
+    {
+      category: "Rent",
+      spend: 6_450,
+      transactions: 3,
+      bestCard: "Cashback One",
+      rewardRate: 0.02,
+      service: "plastiq",
+      serviceName: "Plastiq",
+      fee: 187.05,
+      reward: 129,
+      net: -58.05,
+      worthIt: false,
+      verdict:
+        "Do not route rent through Plastiq for the reward alone — the fee costs 58.05 more than the card pays back. It is only worth doing to reach a welcome-bonus minimum.",
+      alternatives: [
+        { service: "cardup", name: "CardUp", region: "SG", feeRate: 0.026, note: "The original of this category, Singapore and Hong Kong only.", fee: 167.7, reward: 129, net: -38.7 },
+        { service: "plastiq", name: "Plastiq", region: "US", feeRate: 0.029, note: "Pays rent, tuition and invoices by cheque or transfer.", fee: 187.05, reward: 129, net: -58.05 },
+        { service: "melio", name: "Melio", region: "US", feeRate: 0.029, note: "Aimed at business payables; free by bank transfer, 2.9% by card.", fee: 187.05, reward: 129, net: -58.05 },
+      ],
+    },
+  ],
+
+  /* ------------------------------------------------------ welcome bonus -- */
+
+  welcome: [
+    {
+      cardId: "card-horizon",
+      card: "Horizon Miles",
+      state: "at-risk",
+      award: 60_000,
+      unit: "miles",
+      valueUsd: 720,
+      minSpend: 4_000,
+      qualifyingSpend: 3_660,
+      transactions: 42,
+      gap: 340,
+      openedAt: "2026-05-26",
+      deadline: "2026-08-24",
+      daysLeft: 16,
+      perDayNeeded: 21.25,
+      perDayCurrent: 48.8,
+      excludes: ["Balance transfers", "Cash advances", "Fees"],
+      rescue: {
+        spendToRoute: 340,
+        fee: 9.86,
+        bonusValue: 720,
+        net: 710.14,
+        worthIt: true,
+        service: "plastiq",
+        serviceName: "Plastiq",
+        feeRate: 0.029,
+      },
+    },
+  ],
+
+  welcomeCandidates: [
+    {
+      card: "Sapphire Reserve",
+      award: 75_000,
+      unit: "points",
+      valueUsd: 1_500,
+      minSpend: 5_000,
+      windowDays: 90,
+      projectedSpend: 14_460,
+      monthlySpend: 4_820,
+      qualifies: true,
+      shortfall: 0,
+      monthsToMinimum: 1,
+      monthsAllowed: 3,
+    },
+    {
+      card: "Meridian Signature",
+      award: 100_000,
+      unit: "points",
+      valueUsd: 2_000,
+      minSpend: 20_000,
+      windowDays: 90,
+      projectedSpend: 14_460,
+      monthlySpend: 4_820,
+      qualifies: false,
+      shortfall: 5_540,
+      monthsToMinimum: 4.1,
+      monthsAllowed: 3,
+    },
+  ],
+
   /* ------------------------------------------------------------ forecast -- */
 
   forecast: {

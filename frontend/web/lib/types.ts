@@ -224,6 +224,89 @@ export interface Forecast {
   doNothingWindow: string;
 }
 
+/* ------------------------------------------------------------- routing --- */
+
+/** One bill-payment service, priced against this category's spending. */
+export interface RoutingOption {
+  service: string;
+  name: string;
+  region: string;
+  feeRate: number;
+  note: string;
+  fee: number;
+  reward: number;
+  net: number;
+}
+
+/** Spending no card accepts directly, and what routing it would actually cost. */
+export interface RoutableCategory {
+  category: string;
+  spend: number;
+  transactions: number;
+  bestCard: string | null;
+  rewardRate: number;
+  service: string;
+  serviceName: string;
+  fee: number;
+  reward: number;
+  net: number;
+  worthIt: boolean;
+  verdict: string;
+  alternatives: RoutingOption[];
+}
+
+/* ------------------------------------------------------ welcome bonus --- */
+
+export type WelcomeState = "met" | "on-track" | "at-risk" | "missed";
+
+/** Paying a fee to close a minimum — the one case where routing wins. */
+export interface WelcomeRescue {
+  spendToRoute: number;
+  fee: number;
+  bonusValue: number;
+  net: number;
+  worthIt: boolean;
+  service: string;
+  serviceName: string;
+  feeRate: number;
+}
+
+export interface WelcomeProgress {
+  cardId: string | null;
+  card: string;
+  state: WelcomeState;
+  award: number;
+  unit: string;
+  valueUsd: number;
+  minSpend: number;
+  qualifyingSpend: number;
+  transactions: number;
+  gap: number;
+  openedAt: ISODate;
+  deadline: ISODate;
+  daysLeft: number;
+  perDayNeeded: number;
+  perDayCurrent: number;
+  excludes: string[];
+  rescue: WelcomeRescue | null;
+}
+
+/** A bonus not yet started, measured against what this user actually spends. */
+export interface WelcomeCandidate {
+  card: string;
+  award: number;
+  unit: string;
+  valueUsd: number;
+  minSpend: number;
+  windowDays: number;
+  projectedSpend: number;
+  monthlySpend: number;
+  qualifies: boolean;
+  shortfall: number;
+  monthsToMinimum: number | null;
+  monthsAllowed: number;
+}
+
 /* ---------------------------------------------------------------- goal --- */
 
 /**
@@ -459,4 +542,10 @@ export interface Snapshot {
   catalog: CatalogCard[];
   activity: AgentLogEntry[];
   collections: CollectionLink[];
+  /** Spending no card reaches directly, priced against the services that can. */
+  routable: RoutableCategory[];
+  /** Bonus windows running now. */
+  welcome: WelcomeProgress[];
+  /** Bonuses this spending would clear, on cards not yet held. */
+  welcomeCandidates: WelcomeCandidate[];
 }

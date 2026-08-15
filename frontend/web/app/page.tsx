@@ -1,6 +1,8 @@
 import { CardCaps } from "@/components/CardCaps";
 import { ConnectFlow } from "@/components/ConnectFlow";
 import { LeakList } from "@/components/LeakList";
+import { BillRouting } from "@/components/BillRouting";
+import { WelcomeBonuses } from "@/components/WelcomeBonuses";
 import { LedgerBar, LedgerLegend } from "@/components/LedgerBar";
 import { Recommendations } from "@/components/Recommendations";
 import { TrackPanel } from "@/components/TrackPanel";
@@ -147,6 +149,11 @@ export default async function SpendingAnalytics() {
 
         <TrackRecordStrip record={snapshot.trackRecord} />
 
+        <WelcomeBonuses
+          welcome={snapshot.welcome ?? []}
+          candidates={snapshot.welcomeCandidates ?? []}
+        />
+
         <section className="section split">
           <div>
             <h2 className="section__label">What to do next</h2>
@@ -180,6 +187,8 @@ export default async function SpendingAnalytics() {
             )}
           </div>
         </section>
+
+        <BillRouting routable={snapshot.routable ?? []} />
 
         <section className="section">
           <h2 className="section__label">Cards &amp; caps</h2>

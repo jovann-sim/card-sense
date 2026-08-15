@@ -3073,3 +3073,176 @@ body {
   background: transparent;
   color: var(--slate-soft);
 }
+
+/* ==========================================================================
+   BILL ROUTING & WELCOME BONUSES
+
+   Two ideas that share a colour logic: verdigris when the arithmetic says yes,
+   ember when it says no. Routing is almost always ember, which is the point —
+   the page should not have to argue, only show the subtraction.
+   ========================================================================== */
+
+.route { list-style: none; margin: 1.5rem 0 0; padding: 0; }
+
+.route__row {
+  padding: 1rem 0 1.1rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.route__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.route__cat { font-weight: 500; color: var(--graphite); }
+.route__meta { font-size: 0.78rem; color: var(--slate); margin-top: 0.15rem; }
+.route__sum { text-align: right; }
+
+.route__net { font-size: 1.25rem; }
+.route__net[data-sign="gain"] { color: var(--verdigris); }
+.route__net[data-sign="loss"] { color: var(--ember); }
+.route__vs { font-size: 0.75rem; color: var(--slate-soft); margin-top: 0.1rem; }
+
+.route__verdict {
+  margin-top: 0.6rem;
+  max-width: 68ch;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--slate);
+}
+
+.route__row[data-worth="false"] .route__verdict { color: var(--ember); }
+
+.route__toggle {
+  margin-top: 0.6rem;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--brass);
+  cursor: pointer;
+}
+
+.route__toggle:hover { color: var(--brass-deep); text-decoration: underline; }
+
+.route__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.85rem;
+  font-size: 0.82rem;
+}
+
+.route__table th, .route__table td {
+  padding: 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+}
+
+.route__table thead th {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--slate);
+  font-weight: 400;
+}
+
+.route__table tbody th { font-weight: 500; color: var(--graphite); }
+.route__table tr[data-chosen="true"] { background: var(--brass-wash); }
+.route__table td[data-sign="gain"] { color: var(--verdigris); }
+.route__table td[data-sign="loss"] { color: var(--ember); }
+
+.route__note {
+  display: block;
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: var(--slate-soft);
+  margin-top: 0.1rem;
+}
+
+/* -- welcome bonuses ----------------------------------------------------- */
+
+.wb { list-style: none; margin: 1.5rem 0 0; padding: 0; }
+
+.wb__row {
+  padding: 1rem 0 1.2rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.wb__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.wb__card { font-weight: 500; color: var(--graphite); }
+.wb__meta { font-size: 0.78rem; color: var(--slate); margin-top: 0.15rem; }
+
+.wb__state {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  color: var(--slate);
+  white-space: nowrap;
+}
+
+.wb__row[data-state="at-risk"] .wb__state,
+.wb__row[data-state="missed"] .wb__state {
+  border-color: var(--ember);
+  background: var(--ember-wash);
+  color: var(--ember);
+}
+
+.wb__row[data-state="met"] .wb__state,
+.wb__row[data-state="on-track"] .wb__state {
+  border-color: var(--verdigris-tint);
+  background: var(--verdigris-tint);
+  color: var(--verdigris);
+}
+
+.wb__track {
+  height: 0.5rem;
+  background: var(--porcelain);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.wb__fill { display: block; height: 100%; background: var(--brass); }
+.wb__row[data-state="met"] .wb__fill { background: var(--verdigris); }
+.wb__row[data-state="at-risk"] .wb__fill,
+.wb__row[data-state="missed"] .wb__fill { background: var(--ember); }
+
+.wb__figures { margin-top: 0.55rem; font-size: 0.9rem; color: var(--graphite); }
+.wb__of, .wb__gap { color: var(--slate); }
+.wb__pace { margin-top: 0.25rem; font-size: 0.8rem; color: var(--slate); }
+
+.wb__rescue {
+  margin-top: 0.7rem;
+  max-width: 66ch;
+  font-size: 0.83rem;
+  line-height: 1.55;
+  color: var(--verdigris);
+  border-left: 2px solid var(--verdigris);
+  padding-left: 0.85rem;
+}
+
+.wb__yes { color: var(--verdigris); font-weight: 500; }
+.wb__no { color: var(--ember); }
+
+@media (max-width: 720px) {
+  .route__head, .wb__head { flex-direction: column; gap: 0.4rem; }
+  .route__sum { text-align: left; }
+  .route__table { font-size: 0.75rem; }
+}
