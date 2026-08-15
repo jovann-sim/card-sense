@@ -11,6 +11,7 @@ from time import perf_counter
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from .agents.terms import document_from_upload
 from .agents.card_intelligence import with_rule_ids
@@ -39,6 +40,11 @@ logger = logging.getLogger("cardsense")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[x.strip() for x in settings.cors_origins.split(",")],
+    # The browser extension's origin is chrome-extension://<id>, and the id is
+    # only known once it is loaded. Matching the scheme is the standard way to
+    # let an unpacked extension talk to a local backend; it grants nothing on
+    # the public internet, because no web page can hold that origin.
+    allow_origin_regex=r"chrome-extension://[a-z]+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1098,6 +1104,39 @@ def seed_realistic_demo(months: int = Query(12, ge=1, le=24)):
             for key in ("projectedSpend", "variableSpend", "recurringSpend", "confidence")
         },
     }
+
+
+class MerchantIn(BaseModel):
+    """What the extension is allowed to send: a location and a name.
+
+    Deliberately not the page. CardSense never receives a form field, a cart, or
+    a card number, and the narrowness of this model is where that is enforced.
+    """
+    url: str | None = None
+    merchant: str | None = None
+
+
+@app.post("/api/v1/advise/merchant")
+def advise_merchant(body: MerchantIn):
+    """Which card to use at one merchant, for the browser extension.
+
+    Answers from the same rules and the same optimiser as the dashboard, so the
+    two cannot disagree, and declines rather than guesses — a confident wrong
+    card at checkout is worse than no answer.
+    """
+    from .merchants import resolve
+
+    merchant = resolve(body.url, body.merchant)
+    wallet = store.get_wallet(UID)
+    rules = {
+        card["cardId"]: (store.get_global_doc("card_rules", card["cardId"]) or {}).get("rules", [])
+        for card in wallet
+    }
+    result = orch.advisory.verdict(merchant, wallet, rules)
+    logger.info("advise_merchant host=%s mcc=%s card=%s",
+                merchant.get("host"), merchant.get("mcc"),
+                (result.get("card") or {}).get("name"))
+    return result
 
 
 @app.post("/api/v1/catalog/seed")

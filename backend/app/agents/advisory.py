@@ -122,6 +122,105 @@ class AdvisoryAgent:
         return [*self.welcome_actions(welcome or []), *planned, *self.setup_actions(strategy, wallet),
                 *recommendations, *self.routing_actions(strategy, wallet)]
 
+    def verdict(self, merchant, wallet, rules, strategy=None):
+        """Which card to reach for at one merchant, right now.
+
+        The point query behind the browser extension. It answers from the same
+        rules and the same optimiser as the dashboard, so the extension cannot
+        drift from the site — and it declines rather than guesses, because a
+        confident wrong card at checkout is worse than no popup at all.
+
+        It never sees a page's contents, a form field or a card number. A
+        hostname and a site name are the whole input.
+        """
+        from ..agents.strategy import rule_matches, rule_rate
+
+        if not merchant.get("mcc"):
+            return {
+                "merchant": merchant.get("host") or "this page",
+                "known": False,
+                "card": None,
+                "reason": merchant["source"],
+                "trace": [{"agent": "ingestion", "detail": merchant["source"]}],
+            }
+
+        ranked = []
+        for card in wallet:
+            if card.get("parseStatus") != "parsed":
+                continue
+            best = None
+            for rule in rules.get(card.get("cardId"), []):
+                if not rule_matches(rule, merchant["category"], merchant["mcc"]):
+                    continue
+                rate = rule_rate(rule, card.get("track"))
+                if best is None or rate > best[0]:
+                    best = (rate, rule)
+            if best:
+                ranked.append((best[0], card, best[1]))
+        ranked.sort(key=lambda row: row[0], reverse=True)
+
+        if not ranked:
+            return {
+                "merchant": merchant.get("host"),
+                "known": True,
+                "category": merchant["category"],
+                "mcc": merchant["mcc"],
+                "card": None,
+                "reason": "None of your cards has a readable rule covering this category.",
+                "trace": [{"agent": "card-intelligence",
+                           "detail": "No parsed rule matched this merchant category code."}],
+            }
+
+        rate, card, rule = ranked[0]
+        runner = ranked[1] if len(ranked) > 1 else None
+        # A tie is a tie. Presenting one of two identical cards as the answer
+        # implies a difference the arithmetic does not support.
+        tied = runner and abs(runner[0] - rate) < 0.0001
+
+        caveat = None
+        cap = rule.get("capSpend", rule.get("cap"))
+        if cap is not None:
+            caveat = (
+                f"This rate is capped at ${float(cap):,.0f} {rule.get('cycleLabel', 'per cycle')}. "
+                "Past that it pays the base rate."
+            )
+        conditions = unmet_rule_conditions(rule)
+        if conditions:
+            caveat = conditions[0]
+
+        return {
+            "merchant": merchant.get("host"),
+            "known": True,
+            "category": merchant["category"],
+            "mcc": merchant["mcc"],
+            "confidence": merchant["confidence"],
+            "card": {"name": card["name"], "last4": card.get("last4", "0000")},
+            "rate": rule.get("rate", "—"),
+            "valuePerDollar": round(rate, 4),
+            "reason": (
+                f"Pays about ${rate:,.3f} per dollar here"
+                + (
+                    f", ${rate - runner[0]:,.3f} more than {runner[1]['name']}."
+                    if runner and not tied else
+                    f" — the same as {runner[1]['name']}, so either is fine." if tied else "."
+                )
+            ),
+            "caveat": caveat,
+            "runnerUp": (
+                f"{runner[1]['name']} ••{runner[1].get('last4', '0000')} · {runner[2].get('rate', '—')}"
+                if runner else None
+            ),
+            "tied": bool(tied),
+            "trace": [
+                {"agent": "ingestion",
+                 "detail": f"Merchant resolved to MCC {merchant['mcc']} ({merchant['category']}). {merchant['source']}"},
+                {"agent": "card-intelligence",
+                 "detail": f"{card['name']} terms: {rule.get('rate', '—')} on {rule.get('categoryLabel', 'this category')}."},
+                {"agent": "strategy",
+                 "detail": f"Ranked {len(ranked)} of {len(wallet)} cards by value per dollar for this code."},
+            ],
+        }
+
     def plan_actions(self, simulation):
         """The simulator's ranked answer, as advice rather than a table.
 

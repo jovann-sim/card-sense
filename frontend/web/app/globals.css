@@ -3246,3 +3246,71 @@ body {
   .route__sum { text-align: left; }
   .route__table { font-size: 0.75rem; }
 }
+
+/* ==========================================================================
+   THE PLAN — the one section that says do this, rather than this is so
+   ========================================================================== */
+
+.plan { list-style: none; margin: 1.5rem 0 0; padding: 0; counter-reset: plan; }
+
+.plan__row {
+  display: grid;
+  grid-template-columns: 2.25rem 1fr 9rem;
+  gap: 1.25rem;
+  align-items: start;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.plan__rank {
+  font-size: 1.1rem;
+  color: var(--slate-soft);
+  text-align: right;
+  padding-top: 0.9rem;
+}
+
+.plan__kind {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--brass);
+}
+
+.plan__row[data-kind="route-welcome"] .plan__kind { color: var(--verdigris); }
+.plan__row[data-kind="acquire"] .plan__kind { color: var(--slate); }
+
+.plan__title {
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--graphite);
+  margin-top: 0.2rem;
+}
+
+.plan__detail {
+  margin-top: 0.35rem;
+  max-width: 62ch;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--slate);
+}
+
+.plan__cats {
+  margin-top: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--slate-soft);
+}
+
+.plan__worth { text-align: right; padding-top: 0.75rem; }
+.plan__value { font-size: 1.15rem; color: var(--verdigris); }
+.plan__window { font-size: 0.7rem; color: var(--slate-soft); margin-top: 0.15rem; }
+
+.ftable tr[data-worth="false"] th { color: var(--slate); }
+.ftable td[data-sign="gain"] { color: var(--verdigris); }
+.ftable td[data-sign="loss"] { color: var(--ember); }
+
+@media (max-width: 720px) {
+  .plan__row { grid-template-columns: 1.75rem 1fr; }
+  .plan__worth { grid-column: 2; text-align: left; padding-top: 0.5rem; }
+}

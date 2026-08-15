@@ -307,6 +307,64 @@ export interface WelcomeCandidate {
   monthsAllowed: number;
 }
 
+/* ---------------------------------------------------------- strategy --- */
+
+export type PlanStepKind = "reassign" | "acquire" | "route-welcome" | "route-ongoing";
+
+/** One move, with what it is worth and over what window. */
+export interface PlanStep {
+  kind: PlanStepKind;
+  rank: number;
+  value: number;
+  valueWindow: string;
+  title: string;
+  detail: string;
+  card?: string;
+  categories?: string[];
+}
+
+/** A card not held, priced by what it would add rather than what it claims. */
+export interface CardAddition {
+  id: string;
+  card: string;
+  network: string | null;
+  track: string | null;
+  annualFee: number;
+  rewardPerYear: number;
+  netFirstYear: number;
+  netOngoing: number;
+  welcomeValue: number;
+  minSpend: number | null;
+  windowDays: number | null;
+  worthIt: boolean;
+  headlineRate: string | null;
+}
+
+export interface PlanAssignment {
+  category: string;
+  mcc: string;
+  spend: number;
+  useCard: string | null;
+  currentCard: string | null;
+  captured: number;
+  gain: number;
+  switch: boolean;
+  note?: string;
+}
+
+export interface StrategyPlan {
+  observedDays: number;
+  capturedNow: number;
+  bestWithWallet: number;
+  reassignableValue: number;
+  annualisedGap: number;
+  assignments: PlanAssignment[];
+  additions: CardAddition[];
+  routing: Record<string, unknown>[];
+  steps: PlanStep[];
+  service: string;
+}
+
 /* ---------------------------------------------------------------- goal --- */
 
 /**
@@ -548,4 +606,6 @@ export interface Snapshot {
   welcome: WelcomeProgress[];
   /** Bonuses this spending would clear, on cards not yet held. */
   welcomeCandidates: WelcomeCandidate[];
+  /** The ranked answer to "what should I actually do". */
+  plan: StrategyPlan | Record<string, never>;
 }

@@ -334,6 +334,47 @@ export const snapshot: Snapshot = {
   trackRationale:
     "Air travel and dining are two of your three largest categories, and both of your highest-earning cards accrue miles. Miles come out ahead of points by $3.90 a quarter — close enough that the real deciding factor is whether you will actually redeem for flights. If you would rather not think about redemption at all, take cash back and give up about $59 a quarter.",
 
+  /* ------------------------------------------------------------ strategy -- */
+
+  plan: {
+    observedDays: 366,
+    capturedNow: 658.31,
+    bestWithWallet: 742.91,
+    reassignableValue: 84.59,
+    annualisedGap: 84.37,
+    assignments: [],
+    routing: [],
+    service: "plastiq",
+    steps: [
+      {
+        kind: "acquire",
+        rank: 1,
+        value: 281.25,
+        valueWindow: "per year, net of fee",
+        title: "Consider Chase Sapphire Preferred",
+        detail:
+          "On this spending it would add 376.25 a year against a 95 fee, so 281.25 a year ongoing, plus a 720 welcome bonus for 4,000 of spend in 90 days.",
+      },
+      {
+        kind: "reassign",
+        rank: 2,
+        value: 84.59,
+        valueWindow: "over the period priced",
+        title: "Move 11 categories to SC Journey card",
+        card: "SC Journey card",
+        categories: ["Online retail", "Dining", "Fitness"],
+        detail:
+          "online retail, dining, fitness and 8 more — 14,490.91 of spending currently earning 144.90, worth 84.59 more on SC Journey card.",
+      },
+    ],
+    additions: [
+      { id: "sapphire-preferred", card: "Chase Sapphire Preferred", network: "Visa", track: "points", annualFee: 95, rewardPerYear: 376.25, netFirstYear: 1001.25, netOngoing: 281.25, welcomeValue: 720, minSpend: 4000, windowDays: 90, worthIt: true, headlineRate: "5x travel booked through Chase, 3x dining" },
+      { id: "venture-x", card: "Capital One Venture X", network: "Visa", track: "miles", annualFee: 395, rewardPerYear: 471.73, netFirstYear: 1051.73, netOngoing: 76.73, welcomeValue: 975, minSpend: 4000, windowDays: 90, worthIt: true, headlineRate: "10x hotels booked through Capital One, 2x everything" },
+      { id: "amex-gold", card: "American Express Gold", network: "Amex", track: "points", annualFee: 325, rewardPerYear: 470.72, netFirstYear: 865.72, netOngoing: 145.72, welcomeValue: 720, minSpend: 6000, windowDays: 180, worthIt: true, headlineRate: "4x dining and US supermarkets" },
+      { id: "wells-active-cash", card: "Wells Fargo Active Cash", network: "Visa", track: "cashback", annualFee: 0, rewardPerYear: 64.56, netFirstYear: 264.56, netOngoing: 64.56, welcomeValue: 200, minSpend: 500, windowDays: 90, worthIt: true, headlineRate: "2% on everything" },
+    ],
+  },
+
   /* ------------------------------------------------------------- routing -- */
 
   routable: [

@@ -2,6 +2,7 @@ import { CardCaps } from "@/components/CardCaps";
 import { ConnectFlow } from "@/components/ConnectFlow";
 import { LeakList } from "@/components/LeakList";
 import { BillRouting } from "@/components/BillRouting";
+import { StrategyPlan } from "@/components/StrategyPlan";
 import { WelcomeBonuses } from "@/components/WelcomeBonuses";
 import { LedgerBar, LedgerLegend } from "@/components/LedgerBar";
 import { Recommendations } from "@/components/Recommendations";
@@ -148,6 +149,8 @@ export default async function SpendingAnalytics() {
         <ExcludedStrip totals={totals} />
 
         <TrackRecordStrip record={snapshot.trackRecord} />
+
+        <StrategyPlan plan={snapshot.plan ?? {}} />
 
         <WelcomeBonuses
           welcome={snapshot.welcome ?? []}

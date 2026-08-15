@@ -1,10 +1,16 @@
 /**
  * Popup renderer.
  *
- * The seam is `getVerdict()`. Today it returns a fixed object so the UI can be
- * designed and demoed; when the Advisory Agent is live, replace its body with a
- * fetch to the same endpoint the dashboard reads and keep the shape identical.
+ * Asks the content script where we are, asks the backend which card wins there,
+ * renders the answer. The verdict comes from the same rules and the same
+ * optimiser as the dashboard, so the two cannot disagree about a card.
+ *
+ * What leaves this machine is a hostname and a site name. Never the page, never
+ * a form field, never a card number — the extension is advisory only, and reads
+ * far less than it is technically permitted to.
  */
+
+const API = "http://localhost:8080";
 
 const AGENT_LABEL = {
   ingestion: "Ingestion agent",
@@ -14,32 +20,32 @@ const AGENT_LABEL = {
   advisory: "Advisory agent",
 };
 
+/** Ask the content script what page this is. */
+async function detect() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return null;
+  try {
+    return await chrome.tabs.sendMessage(tab.id, { type: "cardsense:detect" });
+  } catch {
+    // No content script on this page — a new tab, the store, a PDF. Fall back
+    // to the tab's own URL, which is enough to name a merchant.
+    return tab.url ? { merchant: null, url: tab.url, isCheckout: false } : null;
+  }
+}
+
 async function getVerdict() {
-  return {
-    merchant: "shop.terrafirma.com · Dining & delivery",
-    card: { name: "Sapphire Reserve", last4: "4471" },
-    rate: "4× points on dining",
-    reason:
-      "Best card you hold for this merchant. Worth about $0.04 per dollar more than the card you used here last time.",
-    // Set to null when there is nothing worth interrupting for.
-    caveat:
-      "Only $18 of the quarterly 4× cap is left. Past that, this card pays the same as every other card you hold.",
-    runnerUp: "Cashback One ••7726 · 2% cash back",
-    trace: [
-      {
-        agent: "ingestion",
-        detail: "Merchant matched to MCC 5812 (eating places) with high confidence.",
-      },
-      {
-        agent: "card-intelligence",
-        detail: "Sapphire Reserve terms, retrieved 4 Aug: 4× points on MCC 5812 up to $1,500 per quarter.",
-      },
-      {
-        agent: "strategy",
-        detail: "Ranked 9 cards by nominal return. Sapphire Reserve leads by $0.04 per dollar until the cap.",
-      },
-    ],
-  };
+  const page = await detect();
+  if (!page?.url) return null;
+
+  const response = await fetch(`${API}/api/v1/advise/merchant`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: page.url, merchant: page.merchant }),
+  });
+  if (!response.ok) throw new Error(`CardSense API returned ${response.status}`);
+
+  const verdict = await response.json();
+  return { ...verdict, isCheckout: page.isCheckout };
 }
 
 function el(id) {
@@ -47,14 +53,22 @@ function el(id) {
 }
 
 function render(v) {
-  el("merchant").textContent = v.merchant;
+  const label = v.category ? `${v.merchant} · ${v.category}` : v.merchant;
+  el("merchant").textContent = v.isCheckout ? `${label} · checkout` : label;
+
   el("card").textContent = v.card.name;
   el("digits").textContent = `••${v.card.last4}`;
-  el("rate").textContent = v.rate;
+  el("rate").textContent = v.rate ?? "";
   el("reason").textContent = v.reason;
 
-  if (v.caveat) {
-    el("caveat").textContent = v.caveat;
+  // A low-confidence merchant match is stated, because the card it produces is
+  // only as good as the category behind it.
+  const caveat = v.confidence === "low"
+    ? `${v.caveat ? v.caveat + " " : ""}The category here was guessed from the site's name, not a known merchant.`
+    : v.caveat;
+
+  if (caveat) {
+    el("caveat").textContent = caveat;
     el("caveat").hidden = false;
   }
 
@@ -64,7 +78,7 @@ function render(v) {
   }
 
   el("why").replaceChildren(
-    ...v.trace.map((step) => {
+    ...(v.trace ?? []).map((step) => {
       const li = document.createElement("li");
       const agent = document.createElement("span");
       agent.className = "why__agent";
@@ -78,14 +92,28 @@ function render(v) {
   );
 }
 
-function renderEmpty(message) {
-  el("merchant").textContent = message;
+function renderEmpty(headline, message) {
+  el("merchant").textContent = headline;
   el("card").textContent = "No call to make";
   el("digits").textContent = "";
-  el("reason").textContent =
-    "CardSense only speaks up when one of your cards clearly beats the others here.";
+  el("rate").textContent = "";
+  el("reason").textContent = message;
+  el("why").replaceChildren();
 }
 
 getVerdict()
-  .then((v) => (v ? render(v) : renderEmpty("No checkout detected on this page")))
-  .catch(() => renderEmpty("Could not reach CardSense"));
+  .then((v) => {
+    if (!v) return renderEmpty("No page to read", "Open a shop and try again.");
+    if (!v.card) {
+      // Declining is the right answer twice over: when we cannot name the
+      // merchant, and when no held card has a readable rule for it.
+      return renderEmpty(v.merchant ?? "Unknown merchant", v.reason);
+    }
+    render(v);
+  })
+  .catch(() =>
+    renderEmpty(
+      "Could not reach CardSense",
+      "The backend is not running on localhost:8080, so there is nothing to recommend from.",
+    ),
+  );
