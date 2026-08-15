@@ -19,6 +19,14 @@ def test_snapshot_is_persisted_as_a_subcollection_read_model():
     assert len(store.get_subcollection("test-user", "agent_runs")) == 5
 
 
+def test_empty_snapshot_reports_agents_as_not_run_without_fake_timestamps():
+    snapshot = Orchestrator(Store()).empty_snapshot("test-user")
+
+    assert snapshot["activity"] == []
+    assert {agent["status"] for agent in snapshot["agents"]} == {"not-run"}
+    assert all(agent["lastRunAt"] is None for agent in snapshot["agents"])
+
+
 def test_async_run_is_visible_while_queued_and_completes_with_real_agent_records(monkeypatch):
     store = Store()
     orchestrator = Orchestrator(store)
@@ -151,6 +159,92 @@ def test_track_record_tolerates_non_numeric_model_values():
     assert record["records"][1]["predicted"] == 12.5
     assert record["records"][1]["actual"] == 0
     assert orchestrator._recommendation(advice[0])["impact"] == 0
+
+
+def test_agent_run_replaces_stale_open_advice_by_run_id():
+    store = Store()
+    orchestrator = Orchestrator(store)
+    store.set_subdoc("user", "advice", "keep", {
+        "id": "keep", "runId": "old-run", "outcome": "open",
+        "headline": "Keep this advice", "impact": 4, "predicted": 4,
+        "pushedAt": "2026-08-01T00:00:00+00:00", "window": "per period",
+    })
+    store.set_subdoc("user", "advice", "stale", {
+        "id": "stale", "runId": "old-run", "outcome": "open",
+        "headline": "No longer supported", "impact": 7, "predicted": 7,
+        "pushedAt": "2026-08-01T00:00:00+00:00", "window": "per period",
+    })
+    store.set_subdoc("user", "advice", "dismissed", {
+        "id": "dismissed", "runId": "old-run", "outcome": "dismissed",
+        "headline": "Already dismissed", "impact": 3, "predicted": 3,
+        "pushedAt": "2026-08-01T00:00:00+00:00", "window": "per period",
+    })
+    orchestrator.advisory.run = lambda *_args: [
+        {
+            "id": "keep", "urgency": "this-week",
+            "headline": "Keep this advice", "card": None, "impact": 5,
+            "impactWindow": "per period", "body": "Still current.", "trace": [],
+        },
+        {
+            "id": "new", "urgency": "this-week",
+            "headline": "New advice", "card": None, "impact": 2,
+            "impactWindow": "per period", "body": "New finding.", "trace": [],
+        },
+        {
+            "id": "dismissed", "urgency": "this-week",
+            # Wording may change between Gemini calls. The stable semantic ID,
+            # not an exact headline match, preserves the user's resolution.
+            "headline": "Reworded but already dismissed", "card": None, "impact": 3,
+            "impactWindow": "per period", "body": "Do not reopen.", "trace": [],
+        },
+    ]
+
+    run_id, snapshot = orchestrator.run("user")
+
+    assert {item["id"] for item in snapshot["recommendations"]} == {"keep", "new"}
+    assert store.get_subdoc("user", "advice", "keep")["runId"] == run_id
+    assert store.get_subdoc("user", "advice", "new")["runId"] == run_id
+    stale = store.get_subdoc("user", "advice", "stale")
+    assert stale["outcome"] == "expired"
+    assert stale["invalidatedByRunId"] == run_id
+    dismissed = store.get_subdoc("user", "advice", "dismissed")
+    assert dismissed["outcome"] == "dismissed"
+    assert dismissed["runId"] == "old-run"
+    # Superseding stale advice is not counted as a user missing valid advice.
+    assert snapshot["trackRecord"]["missed"] == 3
+
+
+def test_skipped_advisory_expires_open_advice_instead_of_retaining_it():
+    store = Store()
+    orchestrator = Orchestrator(store)
+    store.set_subdoc("user", "advice", "old", {
+        "id": "old", "outcome": "open", "headline": "Old advice",
+        "impact": 4, "predicted": 4, "window": "per period",
+    })
+
+    run_id, snapshot = orchestrator.run("user", refresh_advice=False)
+
+    old = store.get_subdoc("user", "advice", "old")
+    assert old["outcome"] == "expired"
+    assert old["invalidatedByRunId"] == run_id
+    assert snapshot["recommendations"] == []
+    advisory = next(agent for agent in snapshot["agents"] if agent["id"] == "advisory")
+    assert advisory["status"] == "degraded"
+
+
+def test_projection_never_surfaces_open_advice_from_another_run():
+    store = Store()
+    orchestrator = Orchestrator(store)
+    store.set_subdoc("user", "advice", "legacy-open", {
+        "id": "legacy-open", "runId": "older-run", "outcome": "open",
+        "headline": "Stale advice", "urgency": "this-week", "card": None,
+        "impact": 9, "impactWindow": "per period", "body": "Old.", "trace": [],
+    })
+
+    snapshot = orchestrator.project("user", "current-run")
+
+    assert snapshot["recommendations"] == []
+    assert snapshot["trackRecord"]["records"][0]["runId"] == "older-run"
 
 
 def test_advice_resolution_uses_targeted_snapshot_projection(monkeypatch):

@@ -159,6 +159,16 @@ body {
   background: var(--ember);
 }
 
+.agent[data-status="not-run"] {
+  color: var(--slate-soft);
+  border-color: var(--hairline);
+}
+
+.agent[data-status="not-run"] .agent__dot {
+  background: transparent;
+  border: 1px solid var(--slate-soft);
+}
+
 .rail__stamp {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
@@ -202,6 +212,16 @@ body {
   max-width: 46rem;
   color: var(--slate);
   font-size: 0.875rem;
+}
+
+.empty-state {
+  margin-top: 0.75rem;
+  padding: 1rem 1.125rem;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius);
+  color: var(--slate);
+  font-size: 0.875rem;
+  line-height: 1.55;
 }
 
 /* ---------------------------------------------------------------- hero ---- */
@@ -2052,6 +2072,21 @@ body {
 
 .docs__row[data-state="warn"] .docs__state {
   color: var(--ember);
+}
+
+.docs__empty {
+  margin-block: 1rem;
+  padding: 1rem;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+  color: var(--slate);
+}
+
+.docs__empty a,
+.dialog__fine a {
+  color: var(--verdigris);
+  text-underline-offset: 0.18em;
 }
 
 .stages {

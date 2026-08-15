@@ -78,29 +78,26 @@ def test_the_range_stays_sane_across_every_offered_horizon():
 
 # -- advisory robustness ----------------------------------------------------
 
-def test_a_bare_list_from_the_model_is_accepted():
-    """Asked for {"recommendations": [...]}, a model may return just the list."""
+def test_a_failing_model_does_not_take_down_the_run():
+    """Deterministic figures must survive the wording step failing.
+
+    The model supplies language only; every number is attached afterwards. So a
+    model that errors should cost the phrasing, never the advice.
+    """
     from app.agents.advisory import AdvisoryAgent
+    from app.agents.strategy import StrategyAgent
 
     class Runtime:
         available = True
-        def json(self, *args, **kwargs):
-            return [{"headline": "Move dining", "impact": 5.0}]
+        def structured(self, *args, **kwargs):
+            raise RuntimeError("model unavailable")
 
-    result = AdvisoryAgent(Runtime()).run({"categories": [], "unclaimed": 0}, {}, [])
-    assert isinstance(result, list) and result[0]["id"] == "rec-0"
+    wallet, rules = _wallet_and_rules()
+    strategy = StrategyAgent().run([_tx("Dining", "5812", 900.0, "d")], wallet, rules)
+    advice = AdvisoryAgent(Runtime()).run(strategy, {}, wallet)
 
-
-def test_a_malformed_model_response_does_not_take_down_the_run():
-    """Deterministic figures must survive a bad advisory response."""
-    from app.agents.advisory import AdvisoryAgent
-
-    class Runtime:
-        available = True
-        def json(self, *args, **kwargs):
-            return "not json at all"
-
-    assert isinstance(AdvisoryAgent(Runtime()).run({"categories": [], "unclaimed": 0}, {}, []), list)
+    assert isinstance(advice, list)
+    assert all(isinstance(item.get("impact"), float) for item in advice)
 
 
 # -- spending no card can reach ---------------------------------------------
@@ -182,14 +179,18 @@ def test_the_advisory_never_tells_you_to_put_rent_on_a_card():
 
     class Runtime:
         available = True
-        def json(self, *args, **kwargs):
-            return {"recommendations": []}
+        def structured(self, *args, **kwargs):
+            from app.agents.advisory import AdvisoryWordingOutput
+            return AdvisoryWordingOutput(recommendations=[])
 
     from app.agents.strategy import StrategyAgent
     wallet, rules = _wallet_and_rules()
     strategy = StrategyAgent().run([_tx("Rent", "6513", 2150.0, "r")], wallet, rules)
     advice = AdvisoryAgent(Runtime()).run(strategy, {}, wallet)
 
-    routing = [item for item in advice if item["id"].startswith("rec-route-")]
+    routing = [item for item in advice if item["id"].startswith("rec-bill-")]
     assert len(routing) == 1
     assert "cannot earn rewards" in routing[0]["headline"]
+    # And nothing else in the list tells you to put rent on a card.
+    assert not any("rent" in item["headline"].lower() and "use " in item["headline"].lower()
+                   for item in advice)

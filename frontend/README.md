@@ -2,12 +2,12 @@
 
 Seven surfaces consume the backend's single `Snapshot` read model through a
 shared server-side loader. In local development, the deliberate fixture
-fallback keeps the dashboard usable while the backend is offline.
+fallback can be enabled explicitly while the backend is offline.
 
-Everything the user enters — cards, planned spending, goals, dismissals — lives
-in React state and is gone on reload. That is deliberate for a shell: it demos
-correctly and there is no fake persistence layer to unpick when Firestore
-arrives.
+Cards, account links, planned spending, goals, and advice resolutions are
+persisted through the FastAPI API. Demo mode writes them to
+`backend/.localstore.json`; non-demo mode writes them to Firestore. Component
+state is only used for forms and optimistic interaction.
 
 ```
 web/         Next.js 16 · TypeScript · Tailwind v4 — the dashboard and its five sibling pages
@@ -65,9 +65,8 @@ them are worth nothing without immediate feedback.
   manual rate entry, which is also how a card whose document never parsed gets
   recovered.
 - **Planned spending** — `/forecast`, added against the timeline it changes.
-  Declaring a purchase recalculates the projection and, if the category would
-  breach a cap, inserts the collision as a new dated warning. That calculation
-  is real, in [web/lib/goal.ts](web/lib/goal.ts).
+  Declaring a purchase persists it and asks the backend Forecast Agent to
+  recalculate the projection and any dated cap collision.
 - **Goals** — `/goals`. A track, a target and a date. Pace, projected arrival
   and the shortfall are computed live as the fields change, along with the one
   change that closes the gap.
@@ -103,10 +102,9 @@ point it at the Advisory Agent's endpoint and keep the shape.
 - **`/history` states the gap between predicted and actual, including when the
   agent was wrong.** Resist the urge to hide the misses; being checkable is the
   whole point of that page.
-- **The catalog on `/cards` prices every card against this user's real
-  spending, net of annual fee.** A browsable list of cards would be a
-  comparison site; a list where every row runs through the strategy agent is
-  still the product.
+- **The catalog on `/cards` is currently descriptive.** Held-card state is
+  real, but `deltaVsWallet` is not yet produced by a new-card simulation and
+  defaults to zero. Do not present catalogue gains as implemented analysis.
 - **Dates render in a pinned timezone** ([web/lib/format.ts](web/lib/format.ts)).
   These pages are statically prerendered, so local-time formatting would
   disagree between a UTC build host and a viewer elsewhere and trigger a
@@ -121,23 +119,23 @@ point it at the Advisory Agent's endpoint and keep the shape.
 - **The extension never fills or stores a card number**, and says so directly
   above where the user is about to type one.
 
-## The connect modal is a replay, not a live run
+## The connect modal uses real Plaid and run state
 
-[web/components/ConnectFlow.tsx](web/components/ConnectFlow.tsx) walks the five
-agents on a fixed 1.6s cadence — about eight seconds end to end. Real runtime is
-roughly 26 seconds, which is too long for a four-minute video, and a live
-sandbox call is a bad thing to depend on while recording. When the agents are
-wired up, drive the same component from real stage transitions if you want the
-honest version, but keep the replay path for the recording.
+[web/components/ConnectFlow.tsx](web/components/ConnectFlow.tsx) opens Plaid
+Link, exchanges the token, synchronizes transactions, and receives the
+completed five-agent run produced by that sync. Steps 2 and 3 verify terms and
+save the goal. Finishing setup reuses the completed sync run rather than
+launching a duplicate analysis. The async run endpoint and polling UI remain as
+a fallback for onboarding paths that do not have a completed sync run.
 
-The `Replay connect` pill in the bottom corner is demo scaffolding. Replace it
-with a real empty-state trigger before this is a product.
+The `Connect accounts` pill is a real trigger, although its fixed position is
+still hackathon-oriented UI.
 
 ## Known follow-ups
 
-- Point and mile conversion rates in `mock.ts` are placeholders. The UI says so
-  on screen under each track card; replace both the rates and the source line
-  before recording.
+- Some point and mile conversion rates have explicit placeholder fallbacks in
+  the backend valuation table. Confirm them before presenting the output as
+  financial guidance.
 - The extension popup loads fonts from Google Fonts over the network. Bundle
   the woff2 files into `extension/` so it renders offline.
 - `detect.js` is a conservative stub — it reports the merchant and whether the

@@ -96,3 +96,5 @@ def test_snapshot_migration_only_reads_wallet_once(monkeypatch):
     assert first["readModelVersion"] == main.READ_MODEL_VERSION
     assert second["readModelVersion"] == main.READ_MODEL_VERSION
     assert test_store.wallet_reads == 1
+    assert {agent["status"] for agent in first["agents"]} == {"not-run"}
+    assert all(agent["lastRunAt"] is None for agent in first["agents"])

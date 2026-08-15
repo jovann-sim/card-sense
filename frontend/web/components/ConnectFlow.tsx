@@ -2,20 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Script from "next/script";
-import type { AgentRun } from "@/lib/types";
+import type { AgentRun, CardDetail } from "@/lib/types";
 import { api, userId } from "@/lib/client-api";
+import { dayMonth } from "@/lib/format";
 
 /** Onboarding dialog backed by the real persisted agent run lifecycle. */
 const RUN_POLL_MS = 400;
-
-const DOCUMENTS = [
-  { card: "Sapphire Reserve", locator: "terms-sapphire-2026.pdf", state: "ok" },
-  { card: "Everyday Blue", locator: "everydayblue-terms.pdf", state: "ok" },
-  { card: "Horizon Miles", locator: "horizon-benefits.html", state: "ok" },
-  { card: "Cashback One", locator: "cashbackone.com/rates", state: "ok" },
-  { card: "Meridian Signature", locator: "meridian-terms.pdf", state: "warn" },
-] as const;
 
 type Step = "accounts" | "documents" | "goal" | "running" | "done";
 
@@ -47,8 +41,12 @@ type RunStatus = {
   status: "queued" | "running" | "complete" | "failed";
   agents: LiveAgent[];
 };
+type CompletedConnectionRun = {
+  runId: string;
+  agents: LiveAgent[];
+};
 
-export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
+export function ConnectFlow({ agents, wallet }: { agents: AgentRun[]; wallet: CardDetail[] }) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("accounts");
   const [linked, setLinked] = useState(false);
@@ -63,6 +61,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
   const [connectionPhase, setConnectionPhase] = useState<"opening" | "syncing">("opening");
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectedAccounts, setConnectedAccounts] = useState<PlaidAccount[]>([]);
+  const [connectionRun, setConnectionRun] = useState<CompletedConnectionRun | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const linkRef = useRef<ReturnType<NonNullable<Window["Plaid"]>["create"]> | null>(null);
   const syncingRef = useRef(false);
@@ -90,9 +89,16 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
           institutionName: metadata?.institution?.name,
         }),
       });
-      await api("/api/v1/plaid/sync", { method: "POST", body: JSON.stringify({ userId }) });
+      const sync = await api<{
+        runId: string;
+        snapshot: { agents: LiveAgent[] };
+      }>("/api/v1/plaid/sync", {
+        method: "POST",
+        body: JSON.stringify({ userId }),
+      });
       const accounts = await api<PlaidAccount[]>("/api/v1/plaid/accounts");
       setConnectedAccounts(accounts);
+      setConnectionRun({ runId: sync.runId, agents: sync.snapshot.agents });
       setLinked(true);
       router.refresh();
     } catch (error) {
@@ -140,6 +146,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
     setStep("accounts");
     setLinked(false);
     setConnectedAccounts([]);
+    setConnectionRun(null);
     setTrack(null);
     setRunError(null);
     setStartingRun(false);
@@ -178,6 +185,20 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
         await api("/api/v1/goals", { method: "DELETE" });
       }
 
+      // Plaid sync already completed a real five-agent run. Goal writes use a
+      // targeted projection, so launching the pipeline again here duplicated
+      // model calls, activity entries, and Firestore writes without changing
+      // the transaction input. Reuse the completed run that produced the
+      // connected snapshot and only fall back to a new run when onboarding did
+      // not originate from a successful sync.
+      if (connectionRun) {
+        setLiveAgents(connectionRun.agents);
+        setStartingRun(false);
+        setStep("done");
+        router.refresh();
+        return;
+      }
+
       const queued = await api<{ runId: string }>("/api/v1/runs/async", {
         method: "POST",
         body: JSON.stringify({ request: "Complete Plaid onboarding and refresh CardSense" }),
@@ -203,7 +224,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
       setStartingRun(false);
       setRunError(error instanceof Error ? error.message : "Unable to run the CardSense agents.");
     }
-  }, [agents, router]);
+  }, [agents, connectionRun, router]);
 
   if (!open) {
     return (
@@ -256,7 +277,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
           </p>
           <h2 className="dialog__title" id="connect-title">
             {step === "accounts" && "Connect the accounts you spend from"}
-            {step === "documents" && "Point us at your card terms"}
+            {step === "documents" && "Verify your card terms"}
             {step === "goal" && "What are you trying to earn?"}
             {step === "running" && "Reading your spending"}
             {step === "done" && "Ready"}
@@ -332,21 +353,47 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
           {step === "documents" && (
             <>
               <p className="dialog__lede">
-                Reward rules come from the issuer&rsquo;s own terms. Give us a
-                link or a PDF for each card and the card intelligence agent
-                rereads them weekly.
+                These are the cards actually in your wallet. Reward rules come
+                from each card&rsquo;s saved issuer terms, and CardSense will flag
+                anything that needs a new source or recheck.
               </p>
-              <ul className="docs">
-                {DOCUMENTS.map((doc) => (
-                  <li key={doc.card} className="docs__row" data-state={doc.state}>
-                    <span className="docs__card">{doc.card}</span>
-                    <span className="docs__locator">{doc.locator}</span>
-                    <span className="docs__state">
-                      {doc.state === "ok" ? "ready" : "may not parse"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              {wallet.length > 0 ? (
+                <ul className="docs">
+                  {wallet.map((card) => (
+                    <li
+                      key={card.walletId ?? card.id ?? card.cardId ?? `${card.name}-${card.last4}`}
+                      className="docs__row"
+                      data-state={card.parseStatus === "parsed" ? "ok" : "warn"}
+                    >
+                      <span className="docs__card">{card.name} · ••{card.last4}</span>
+                      <span className="docs__locator">
+                        {card.source.label} · {card.source.locator}
+                        {card.parseStatus !== "failed" && card.nextRecheckAt
+                          ? ` · next check ${dayMonth(card.nextRecheckAt)}`
+                          : ""}
+                      </span>
+                      <span className="docs__state">
+                        {card.parseStatus === "parsed"
+                          ? `ready${card.parseConfidence != null ? ` · ${Math.round(card.parseConfidence * 100)}%` : ""}`
+                          : card.parseStatus === "stale"
+                            ? "recheck due"
+                            : "needs terms"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="docs__empty">
+                  <p>No cards are in your wallet yet.</p>
+                  <Link href="/cards">Add a card and its issuer terms</Link>
+                </div>
+              )}
+              {wallet.some((card) => card.parseStatus !== "parsed") && (
+                <p className="dialog__fine">
+                  Cards needing attention are excluded from comparisons. You can continue now or {" "}
+                  <Link href="/cards">review them in your wallet</Link>.
+                </p>
+              )}
               <button
                 type="button"
                 className="btn"
@@ -390,7 +437,7 @@ export function ConnectFlow({ agents }: { agents: AgentRun[] }) {
                   disabled={startingRun}
                   onClick={() => startRun(track)}
                 >
-                  {startingRun ? "Starting…" : "Start the agents"}
+                  {startingRun ? "Saving…" : "Finish setup"}
                 </button>
                 <button
                   type="button"

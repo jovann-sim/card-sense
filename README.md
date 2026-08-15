@@ -1,110 +1,148 @@
-# CardSense — Agentic Credit Card Reward Optimizer
+# CardSense
 
-> Built for the **All Things Agentic Hackathon** (Google Gemini + ADK) — Track: **The Taskmaster**
+CardSense is a single-user, sandbox-first credit-card reward analyser. It
+connects transaction data, reads reward terms for cards in a wallet, compares
+actual card use with verified alternatives, forecasts near-term spending, and
+shows recommendations with an agent trace.
 
-## The Problem
+The current repository is a working hackathon prototype, not a production
+financial service. Plaid Sandbox and CSV ingestion are functional. The web
+dashboard is connected to the backend. Authentication, production Plaid
+hardening, exact reward-condition simulation, and the extension's live
+recommendation call remain future work.
 
-Credit card rewards programs are deliberately hard to optimize. Reward categories, MCC (Merchant Category Code) mappings, spending caps, and sign-up bonuses are scattered across dozens of PDFs and T&Cs pages. Most people default to using one or two cards for everything, silently leaving reward value on the table every month — not because they don't care, but because doing the math themselves is tedious and never-ending (issuers change terms constantly).
+## Current runtime
 
-## What CardSense Does
-
-CardSense is an **autonomous, multi-agent workflow** that removes this research burden entirely. It ingests a user's spending, matches it against a live-updated database of card reward structures, simulates which combination of cards would have maximized (and will maximize) rewards, and proactively tells the user how to change their strategy — without the user ever having to read a single T&Cs PDF.
-
-This is not a chatbot. The user does not "ask" CardSense anything. It runs in the background, analyzes on its own schedule, and pushes recommendations to the user.
-
-## Agent Architecture
-
-CardSense is built as a pipeline of cooperating agents orchestrated with **Google ADK**, each with a narrow, well-defined job — not one monolithic prompt trying to do everything.
-
-| Agent | Owner | Job | Trigger |
-|---|---|---|---|
-| **Ingestion Agent** | [Teammate A] | Pulls transaction data (via Plaid **sandbox**, or a CSV upload for demo purposes), normalizes and categorizes each transaction by MCC code, amount, and merchant | Scheduled / on new transaction webhook |
-| **Forecast Agent** | [Teammate A] | Projects near-term spending using recent category trends **plus user-declared upcoming events** (e.g. "holiday shopping," "moving," "new job") — not statistical seasonality detection, which sparse sandbox data can't support credibly | Triggered after ingestion |
-| **Card Intelligence Agent** | [Teammate B] | Ingests reward rules from a fixed set of **user-supplied PDF/webpage links** (Gemini's native document understanding parses T&Cs into structured MCC → reward-rate JSON). A scheduled job (Cloud Scheduler → Pub/Sub) re-checks the same known URLs periodically and re-parses on change, rather than open-ended crawling | Manual seed + scheduled diff-check |
-| **Simulation & Strategy Agent** | [Teammate B] | Runs the user's transaction + forecast data against every card in the database. Supports three optimization tracks — **points, cashback, air miles** — and converts all three to a nominal dollar value using a stated conversion methodology, so it can recommend the best track when the user has no preference. Flags diminishing-returns situations (e.g., overusing a capped category) | Triggered after ingestion + forecast |
-| **Advisory Agent** | [Both] | Turns the Strategy Agent's output into a plain-language recommendation ("Use Card X for groceries — you're 80% toward your cap on Card Y") and pushes it to the dashboard **and** the browser extension | Triggered after simulation completes |
-
-All agents communicate through a shared Firestore schema rather than calling each other directly — agree on the transaction object and card-reward-rule object shape **before** writing agent logic, since that's the seam where a two-person split usually breaks.
-
-### Reward Track Conversion (fill in your actual assumed rates)
-- Cashback: 1:1, already in dollars
-- Points: 1 point ≈ $0.01 (adjust to your source)
-- Miles: 1 mile ≈ $0.013 (adjust to your source)
-
-State your source for these in the demo — judges will accept an assumption if it's explicit, not if it's silently baked in.
-
-## Tech Stack (hackathon requirements)
-
-- **Model:** Gemini 3.5 (via Vertex AI) — used for categorization reasoning, strategy synthesis, and natural-language recommendation generation
-- **Agent Framework:** Google ADK — orchestrates the four-agent pipeline and manages agent-to-agent handoffs
-- **Google Cloud infra:** Firestore (transaction + card-database storage), Cloud Run (hosting the agent pipeline and API), Pub/Sub (event trigger between Ingestion → Simulation agents)
-- **Data source:** Plaid (Sandbox environment for the demo — see Scope Decisions)
-- **Frontend:** [React dashboard / Chrome extension — fill in based on what you actually build]
-
-## MVP Scope for the Hackathon (read this before building)
-
-Building all four agents *and* a full 4-page dashboard *and* live web scraping *and* real Plaid production data *and* a checkout-time browser extension is not realistic for a weekend with two people who are new to agent development. This is the scoped-down version that is actually finishable and demoable:
-
-**In scope:**
-- Ingestion Agent working against **Plaid sandbox data** (fake but realistic transactions)
-- Forecast Agent projecting near-term spending from recent trends + user-declared life events (not statistical seasonality)
-- A **fixed, curated set of ~8–10 real credit cards**, seeded via the Card Intelligence Agent parsing PDF/webpage links you feed it (not open-ended crawling)
-- Simulation Agent computing actual vs. optimal rewards across all three tracks (points/cashback/miles), converted to a nominal dollar value, for the sandbox transaction history
-- Advisory Agent producing a natural-language recommendation, delivered to a dashboard notification
-- **Chrome extension** that detects the merchant on a checkout page and shows a popup recommendation ("Use Card X ending in 4821") — **recommendation only; it never auto-fills or stores an actual card number**, both because that's a major security/PCI liability and because automatic entry of payment credentials into forms is out of scope for what we're building
-- One dashboard page: Spending Analytics (most-spent MCC categories, rewards earned vs. rewards missed)
-
-**Explicitly out of scope for the hackathon (call these out as "Roadmap" in your writeup — judges respect an honest scope cut more than a broken ambitious build):**
-- Real-time production Plaid integration
-- Open-ended internet scraping beyond the specific URLs you feed the agent
-- Auto-filling or auto-submitting real card numbers at checkout
-- Full 4-page dashboard (Dashboard / Analytics / Cards / Settings)
-- Third-party rent/loan-to-spend conversion strategies (e.g., CardUp)
-
-## Disclaimer
-
-CardSense provides informational spending analysis based on publicly available reward program terms. It is not a licensed financial advisor and does not provide personalized financial advice. Reward terms change frequently and users should verify current terms directly with their card issuer before making financial decisions.
-
-## Setup / Spin-Up Instructions
-
+```text
+Plaid Link or CSV
+  -> normalised transactions
+  -> Ingestion audit
+  -> Card Intelligence terms refresh
+  -> deterministic Strategy simulation
+  -> deterministic Forecast
+  -> Advisory wording
+  -> validated snapshots/current
+  -> Next.js dashboard
 ```
-# 1. Clone the repo
-git clone <your-repo-url>
-cd cardsense
 
-# 2. Set up Google Cloud
-gcloud auth login
-gcloud config set project <your-project-id>
+The default engine is the built-in orchestrator. An ADK graph exists behind
+`PIPELINE_ENGINE=adk`, but it is experimental and does not yet have complete
+persistence and output parity with the default engine.
 
-# 3. Install dependencies
+Agents coordinate through persisted collections rather than calling each
+other directly:
+
+| Agent | Responsibility | Implementation |
+|---|---|---|
+| Ingestion | Normalise and audit Plaid/CSV transactions | Deterministic Python |
+| Card Intelligence | Extract structured rules from issuer terms | Gemini with deterministic validation |
+| Simulation & Strategy | Calculate captured and alternative reward value | Deterministic Python |
+| Forecast | Project 30-day spend and cap collisions | Deterministic Python |
+| Advisory | Turn findings into recommendations | Gemini with deterministic fallback/actions |
+
+Gemini never owns arithmetic displayed as money. Card Intelligence also fails
+closed: unreadable or low-confidence terms are excluded instead of guessed.
+
+## What works
+
+- Plaid Link token creation, token exchange, account storage, cursor sync,
+  modified/removed transactions, webhooks, manual sync, and per-Item disconnect
+- Plaid credit-account to wallet-card linking, automatic only for a unique
+  credit-account mask match, with manual linking available
+- CSV import through the same canonical transaction contract
+- Card terms from URLs, PDFs, uploads, pasted text, or manually entered rules
+- Five-stage run logging with `not-run`, `running`, `ok`, and `degraded` states
+- Run-scoped recommendations that expire when a later strategy run no longer
+  supports them, without reopening acted or dismissed advice
+- Forecasts, goals, planned purchases, recommendations, history, cards, Plaid
+  connection management, and truthful empty states in the dashboard
+- Local JSON persistence in demo mode and Firestore in non-demo mode
+- Typed and validated `Snapshot` contract shared by FastAPI and Next.js
+- Sandbox-only full reset and scoped Plaid disconnect
+
+## Important limitations
+
+- All API operations use the fixed `demo-user`; there is no authentication or
+  multi-user isolation.
+- Reward simulation does not yet enforce every minimum-spend, enrolment,
+  merchant/channel, promotional, and statement-cycle condition precisely.
+- Reward-unit valuations include stated assumptions and fallbacks.
+- The ADK engine is experimental; the orchestrator is authoritative.
+- The Chrome extension popup still uses a fixed recommendation and is not
+  connected to the backend.
+- Catalogue `deltaVsWallet` values are not yet calculated by a new-card
+  simulation.
+- FastAPI background tasks are not a durable production job queue.
+- Plaid webhook signature verification and production secret management are
+  not implemented.
+
+Do not connect production financial accounts or expose this API to multiple
+people in its current form.
+
+## Local setup
+
+Backend:
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# 4. Set environment variables
 cp .env.example .env
-# Fill in: GEMINI_API_KEY / VERTEX_PROJECT_ID, PLAID_CLIENT_ID (sandbox), PLAID_SECRET (sandbox)
-
-# 5. Run locally
-python main.py
-
-# 6. (Optional) Deploy to Cloud Run
-gcloud run deploy cardsense --source .
+uvicorn app.main:app --reload --port 8080
 ```
 
-## Test / Stress Cases to Cover Before the Demo
+Frontend:
 
-- A purchase spanning multiple MCC categories in one transaction (e.g. Walmart groceries + electronics)
-- A reward cap hit mid-month (does the agent correctly flag diminishing returns?)
-- A sign-up bonus with a spending deadline approaching
-- A PDF that fails to parse cleanly — does the agent degrade gracefully or crash the pipeline?
-- An ambiguous merchant name that could map to more than one MCC
-- Two cards tied for the best nominal value on a given track
-- User has no stated track preference — does the recommendation logic pick a track and explain why?
+```bash
+cd frontend/web
+cp .env.local.example .env.local
+npm install
+npm run dev
+```
 
-## Team
+The frontend expects `CARDSENSE_API_URL=http://localhost:8080`. Mock data is
+used only in development when `CARDSENSE_USE_MOCK_DATA=true`; production fails
+visibly if the backend is unavailable.
 
-- [Your name] — NUS, Computer Science & Mathematics (DDP) — Ingestion + Forecast Agents
-- [Friend's name] — Card Intelligence + Simulation/Strategy Agents
+Useful backend settings:
 
-## Findings & Learnings
+```env
+DEMO_MODE=true
+PLAID_CLIENT_ID=...
+PLAID_SECRET=...
+PLAID_ENV=sandbox
+GOOGLE_CLOUD_PROJECT=...
+GEMINI_ENABLED=true
+PIPELINE_ENGINE=orchestrator
+SNAPSHOT_CACHE_TTL_SECONDS=10
+INTERNAL_RUN_SECRET=replace-this
+```
 
-[Fill in after building — judges specifically ask for this in the submission text description]
+Plaid, Gemini, and storage are independently configured. `DEMO_MODE=true`
+selects local storage; it does not disable Plaid Sandbox or Gemini.
+
+## Data and reset behavior
+
+- Demo mode persists to `backend/.localstore.json` by default.
+- `DEMO_MODE=false` uses Firestore and requires Google Application Default
+  Credentials.
+- Disconnecting a Plaid Item revokes it remotely, removes only that Item's
+  transactions/accounts, unlinks affected cards, and recalculates.
+- `POST /api/v1/demo/reset` is allowed only in demo mode with Plaid Sandbox and
+  requires `X-Internal-Secret`. It clears the single user's operational data
+  while preserving the catalogue and global card rules.
+
+## Verification
+
+```bash
+cd backend && pytest -q
+cd frontend/web && npm run lint
+cd frontend/web && npx tsc --noEmit
+cd frontend/web && npm run build
+```
+
+See [backend/README.md](backend/README.md),
+[frontend/README.md](frontend/README.md), and
+[CardSense-Architecture.html](CardSense-Architecture.html) for implementation
+details and explicit current/future boundaries.

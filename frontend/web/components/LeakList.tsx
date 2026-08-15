@@ -6,6 +6,7 @@ import { LedgerBar } from "./LedgerBar";
 const FLAG_LABEL: Record<CategoryFlag, string> = {
   "multi-mcc": "Split across categories",
   "ambiguous-merchant": "Merchant unclear",
+  "conditional-rate": "Eligibility unverified",
   "rules-unverified": "Rules unread",
 };
 
@@ -17,7 +18,10 @@ export function LeakList({ categories }: { categories: CategoryLeak[] }) {
   // Bar length is the total reward the category could return, scaled against
   // the richest category — so a long bar means a lot was on offer, and the
   // hatched share of it means a lot was missed.
-  const maxReward = Math.max(...rows.map((r) => r.captured + r.unclaimed));
+  const maxReward = Math.max(
+    0,
+    ...rows.map((r) => r.captured + r.unclaimed),
+  );
 
   return (
     <ol className="leak">
@@ -35,7 +39,11 @@ export function LeakList({ categories }: { categories: CategoryLeak[] }) {
             className="leak__track"
             style={
               {
-                "--track": `${((row.captured + row.unclaimed) / maxReward) * 100}%`,
+                "--track": `${
+                  maxReward > 0
+                    ? ((row.captured + row.unclaimed) / maxReward) * 100
+                    : 0
+                }%`,
               } as CSSProperties
             }
           >

@@ -15,14 +15,14 @@ export type AgentId =
   | "strategy"
   | "advisory";
 
-/** `degraded` means the agent ran but could not complete every input. */
-export type AgentStatus = "ok" | "degraded" | "running";
+/** `not-run` is distinct from a successful run; `degraded` completed partially. */
+export type AgentStatus = "not-run" | "ok" | "degraded" | "running";
 
 export interface AgentRun {
   id: AgentId;
   label: string;
   status: AgentStatus;
-  lastRunAt: ISODate;
+  lastRunAt: ISODate | null;
   /** Shown when status is not `ok`. Explains what the agent could not do. */
   note?: string;
 }
@@ -65,6 +65,7 @@ export interface Totals {
 export type CategoryFlag =
   | "multi-mcc"
   | "ambiguous-merchant"
+  | "conditional-rate"
   | "rules-unverified";
 
 export interface CategoryLeak {
@@ -89,6 +90,8 @@ export type Urgency = "act-now" | "this-week" | "informational";
 
 export interface Recommendation {
   id: string;
+  /** Agent run whose strategy output supports this recommendation. */
+  runId?: string;
   urgency: Urgency;
   /** The action, written as an imperative. */
   headline: string;
@@ -273,9 +276,13 @@ export type AdviceOutcome = "open" | "acted" | "dismissed" | "expired";
 
 export interface AdviceRecord {
   id: string;
+  /** Agent run that produced this recommendation. Absent on legacy records. */
+  runId?: string;
+  /** Later run that retired this recommendation as no longer supported. */
+  invalidatedByRunId?: string | null;
   outcome: AdviceOutcome;
   pushedAt: ISODate;
-  resolvedAt?: ISODate;
+  resolvedAt?: ISODate | null;
   headline: string;
   card?: CardRef;
   predicted: number;
@@ -366,6 +373,8 @@ export interface CardDetail {
   id?: string;
   /** Plaid credit account whose transactions were made on this card. */
   accountId?: string | null;
+  /** Prevent mask matching from undoing an explicit account disconnection. */
+  accountAutoLinkDisabled?: boolean;
   name: string;
   last4: string;
   network: string;

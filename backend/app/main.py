@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import csv
 import io
+import json
 import re
 import uuid
 import logging
@@ -145,7 +146,7 @@ def link_accounts_to_cards(uid: str) -> list[dict]:
     linked = []
     claimed = {card["accountId"] for card in store.get_wallet(uid) if card.get("accountId")}
     for card in store.get_wallet(uid):
-        if card.get("accountId"):
+        if card.get("accountId") or card.get("accountAutoLinkDisabled"):
             continue
         matches = [
             account for account in accounts
@@ -457,6 +458,7 @@ def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
         "track": card["track"],
         "cardId": card_id,
         "accountId": card.get("accountId"),
+        "accountAutoLinkDisabled": card.get("accountAutoLinkDisabled", False),
         "rules": rules,
         "characteristics": parsed.get("characteristics", {}),
         # The card's own billing currency. Rendered rather than converted.
@@ -563,8 +565,28 @@ def link_card_account(card_id: str, body: dict):
     if linked_elsewhere:
         raise HTTPException(409, f"That account is already linked to {linked_elsewhere['name']}")
 
-    store.set_subdoc(UID, "wallet", card_id, {"accountId": account_id})
-    _, snap = orch.run(UID, "Recalculate after linking an account", refresh_advice=False)
+    store.set_subdoc(UID, "wallet", card_id, {
+        "accountId": account_id,
+        "accountAutoLinkDisabled": False,
+    })
+    _, snap = orch.run(UID, "Recalculate after linking an account")
+    return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
+
+
+@app.delete("/api/v1/cards/{card_id}/link-account", response_model=CardResponse)
+def unlink_card_account(card_id: str):
+    """Detach transaction attribution without deleting the Plaid account or transactions."""
+    card = store.get_subdoc(UID, "wallet", card_id)
+    if not card:
+        raise HTTPException(404, "Card not found")
+
+    store.set_subdoc(UID, "wallet", card_id, {
+        "accountId": None,
+        # A future Plaid sync still runs mask-based linking. Remember that this
+        # empty link was chosen deliberately instead of immediately undoing it.
+        "accountAutoLinkDisabled": True,
+    })
+    _, snap = orch.run(UID, "Recalculate after unlinking an account")
     return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
 
 
@@ -697,13 +719,51 @@ def plaid_sandbox_seed(body: LinkTokenIn):
 
     from plaid.model.products import Products
     from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
+    from plaid.model.sandbox_public_token_create_request_options import SandboxPublicTokenCreateRequestOptions
 
     uid = _uid(body.userId)
     client = get_plaid_client()
     try:
+        # The default Sandbox user can expose only a checking account, which
+        # cannot be attributed to a rewards card. A custom user makes the seed
+        # useful and repeatable: two credit cards with stable masks and generated
+        # transaction history controlled by a stable seed.
+        custom_user = {
+            "seed": "cardsense-credit-card-v2",
+            "override_accounts": [
+                {
+                    "type": "credit",
+                    "subtype": "credit card",
+                    "currency": BASE_CURRENCY,
+                    "starting_balance": 1500,
+                    "meta": {
+                        "name": "CardSense Credit Card",
+                        "official_name": "CardSense Sandbox Rewards Credit Card",
+                        "mask": "3333",
+                        "limit": 10000,
+                    },
+                },
+                {
+                    "type": "credit",
+                    "subtype": "credit card",
+                    "currency": BASE_CURRENCY,
+                    "starting_balance": 800,
+                    "meta": {
+                        "name": "CardSense Credit Card 2",
+                        "official_name": "CardSense Sandbox Rewards Credit Card 2",
+                        "mask": "9999",
+                        "limit": 8000,
+                    },
+                },
+            ],
+        }
         created = client.sandbox_public_token_create(SandboxPublicTokenCreateRequest(
             institution_id="ins_109508",  # First Platypus Bank, the standard sandbox institution
             initial_products=[Products("transactions")],
+            options=SandboxPublicTokenCreateRequestOptions(
+                override_username="user_custom",
+                override_password=json.dumps(custom_user),
+            ),
         )).to_dict()
         from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 
@@ -719,6 +779,7 @@ def plaid_sandbox_seed(body: LinkTokenIn):
         "accessToken": exchanged["access_token"],
         "cursor": None,
         "institutionId": "ins_109508",
+        "institutionName": "First Platypus Bank",
         "createdAt": datetime.now(timezone.utc).isoformat(),
     })
     accounts = _store_plaid_accounts(uid, client, exchanged["access_token"], item_id)
@@ -891,16 +952,12 @@ def plaid_sync(body: SyncIn):
         # A card added after the bank was connected still needs attaching.
         link_accounts_to_cards(uid)
         transactions = _rebuild_ingestion_from_store(uid)
-        # Plaid connection should not wait for a Gemini advisory call. Existing
-        # advice remains valid while deterministic totals and strategy refresh.
-        # Skipping the model keeps a bank connection fast, but that is only
-        # safe when there is advice to retain. On a first sync there is none,
-        # so the dashboard would show nothing to do and a track record of
-        # "0 of 0", which reads as broken rather than as an optimisation.
+        # Strategy has changed, so advice must be regenerated for this run.
+        # Retaining an older run's open recommendations would make the
+        # dashboard actionable but stale.
         run_id, snap = orch.run(
             uid,
             "Analyse newly synced Plaid transactions",
-            refresh_advice=not store.get_subcollection(uid, "advice"),
         )
         logger.info("plaid_sync uid=%s duration_ms=%d added=%d modified=%d removed=%d", uid, round((perf_counter() - started) * 1000), totals["added"], totals["modified"], totals["removed"])
 
