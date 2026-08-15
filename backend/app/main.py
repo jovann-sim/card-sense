@@ -44,7 +44,10 @@ app.add_middleware(
     # only known once it is loaded. Matching the scheme is the standard way to
     # let an unpacked extension talk to a local backend; it grants nothing on
     # the public internet, because no web page can hold that origin.
-    allow_origin_regex=r"chrome-extension://[a-z]+",
+    # Vercel gives every preview deployment its own subdomain, so pinning one
+    # origin would work for production and break every preview. The extension's
+    # origin is likewise only known once it is loaded.
+    allow_origin_regex=r"chrome-extension://[a-z]+|https://[a-z0-9-]+\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
