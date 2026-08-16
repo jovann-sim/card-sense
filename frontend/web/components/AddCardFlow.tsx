@@ -46,20 +46,27 @@ export function AddCardFlow({
 
   const [name, setName] = useState(manualFor?.name ?? "");
   const [last4, setLast4] = useState(manualFor?.last4 ?? "");
+  const [openedAt, setOpenedAt] = useState(manualFor?.openedAt ?? "");
   const [source, setSource] = useState(manualFor?.termsUrl ?? "");
   const [network, setNetwork] = useState(manualFor?.network ?? "Visa");
   const [track, setTrack] = useState<string>(manualFor?.track ?? "cashback");
   const [rules, setRules] = useState<ParsedRule[]>(manualFor ? [BLANK_RULE] : []);
   const [file, setFile] = useState<File | null>(null);
 
-  const payload = () => ({
-    name: name.trim() || "Untitled card",
-    last4: last4.trim() || "0000",
-    network,
-    annualFee: manualFor?.annualFee ?? 0,
-    track,
-    termsUrl: source.trim() || null,
-  });
+  const payload = () => {
+    if (!/^\d{4}$/.test(last4)) {
+      throw new Error("Enter exactly four digits from the end of the card number.");
+    }
+    return {
+      name: name.trim() || "Untitled card",
+      last4,
+      network,
+      annualFee: manualFor?.annualFee ?? 0,
+      track,
+      openedAt: openedAt || null,
+      termsUrl: source.trim() || null,
+    };
+  };
 
   /** Hand the document to the agent and show back whatever it actually read. */
   async function readTerms(event: React.FormEvent) {
@@ -158,6 +165,21 @@ export function AddCardFlow({
                 onChange={(e) => setLast4(e.target.value.replace(/\D/g, "").slice(0, 4))}
                 placeholder="0000"
                 inputMode="numeric"
+                pattern="[0-9]{4}"
+                minLength={4}
+                maxLength={4}
+                title="Enter exactly four digits"
+                required
+              />
+            </label>
+
+            <label className="field">
+              <span className="field__label">Card opened date (optional)</span>
+              <input
+                className="field__input"
+                type="date"
+                value={openedAt}
+                onChange={(e) => setOpenedAt(e.target.value)}
               />
             </label>
 

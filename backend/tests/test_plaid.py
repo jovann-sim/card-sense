@@ -195,11 +195,14 @@ def test_unlink_card_keeps_plaid_account_and_transactions(monkeypatch):
         "cardId": "visa-card", "name": "Card", "last4": "3333", "accountId": "acc-5"})
 
     class StubOrchestrator:
-        def run(self, uid, _request):
+        store = test_store
+
+        def run(self, uid, _request, **_kwargs):
             return "run", {"wallet": test_store.get_wallet(uid)}
 
     monkeypatch.setattr(main, "store", test_store)
     monkeypatch.setattr(main, "orch", StubOrchestrator())
+    monkeypatch.setattr(main.settings, "pipeline_engine", "orchestrator")
 
     result = main.unlink_card_account("visa-card")
 

@@ -25,9 +25,9 @@ Plaid Link or CSV
   -> Next.js dashboard
 ```
 
-The default engine is the built-in orchestrator. An ADK graph exists behind
-`PIPELINE_ENGINE=adk`, but it is experimental and does not yet have complete
-persistence and output parity with the default engine.
+The default engine is the ADK workflow. All five stages persist the same read
+model and recommendation lifecycle as the built-in orchestrator, which remains
+available as an explicit fallback with `PIPELINE_ENGINE=orchestrator`.
 
 Agents coordinate through persisted collections rather than calling each
 other directly:
@@ -67,7 +67,8 @@ closed: unreadable or low-confidence terms are excluded instead of guessed.
 - Reward simulation does not yet enforce every minimum-spend, enrolment,
   merchant/channel, promotional, and statement-cycle condition precisely.
 - Reward-unit valuations include stated assumptions and fallbacks.
-- The ADK engine is experimental; the orchestrator is authoritative.
+- ADK is the default pipeline engine; the deterministic orchestrator remains
+  available as a fallback through `PIPELINE_ENGINE=orchestrator`.
 - The Chrome extension popup still uses a fixed recommendation and is not
   connected to the backend.
 - Catalogue `deltaVsWallet` values are not yet calculated by a new-card
@@ -114,7 +115,7 @@ PLAID_SECRET=...
 PLAID_ENV=sandbox
 GOOGLE_CLOUD_PROJECT=...
 GEMINI_ENABLED=true
-PIPELINE_ENGINE=orchestrator
+PIPELINE_ENGINE=adk
 SNAPSHOT_CACHE_TTL_SECONDS=10
 INTERNAL_RUN_SECRET=replace-this
 ```

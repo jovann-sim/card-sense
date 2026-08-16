@@ -180,10 +180,10 @@ def test_an_unknown_engine_is_rejected():
         RunIn(engine="something-else")
 
 
-def test_the_orchestrator_remains_the_default():
-    """The graph is proven against the orchestrator, not trusted over it."""
+def test_adk_is_the_default_with_the_orchestrator_as_fallback():
+    """Parity tests make ADK safe to use without removing the fallback."""
     from app.config import settings
-    assert settings.pipeline_engine == "orchestrator"
+    assert settings.pipeline_engine == "adk"
 
 
 def test_every_graph_node_maps_to_a_read_model_agent():

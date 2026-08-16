@@ -525,6 +525,8 @@ export interface CardDetail {
   network: string;
   annualFee: number;
   track: RewardTrack;
+  /** Required to calculate an issuer welcome-bonus deadline. */
+  openedAt?: ISODate | null;
   rules: ParsedRule[];
   source: { label: string; locator: string; retrievedAt: ISODate };
   recheckCadence: string;

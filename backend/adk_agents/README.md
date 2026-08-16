@@ -35,17 +35,19 @@ adk_agents/
 
 ## Which agents belong here, and which do not
 
-Only the two Gemini-driven agents become ADK `Agent`s. ADK's `Agent` is
-LLM-shaped — it takes a model and an instruction — and three of the five
-CardSense agents are deterministic on purpose.
+All five production stages are ADK nodes. Card Intelligence and Advisory also
+retain standalone ADK `Agent` packages for `adk run`/`adk web`; the production
+workflow uses `BaseAgent` adapters around the application implementations so
+the ADK and fallback paths share persistence, validation and model fallbacks.
+Three of the five stages are deterministic on purpose.
 
 | Agent | Home | Why |
 |---|---|---|
-| Advisory | ADK agent | Language over figures it is given |
-| Card Intelligence | ADK agent | Document understanding |
-| Ingestion | Plain Python, exposed as a tool | A fetch, a join and a group-by |
-| Forecast | Plain Python, exposed as a tool | Arithmetic over history |
-| Strategy | Plain Python, exposed as a tool | Every money figure originates here |
+| Advisory | ADK node over shared Advisory implementation | Language over figures it is given |
+| Card Intelligence | ADK node over shared Card Intelligence implementation | Document understanding and persisted terms |
+| Ingestion | Deterministic ADK node | A fetch, a join and a group-by |
+| Forecast | Deterministic ADK node | Arithmetic over history |
+| Strategy | Deterministic ADK node | Every money figure originates here |
 
 Wrapping the deterministic three as LLM agents would put a model underneath
 numbers that must be reproducible, and would contradict the architecture's
@@ -53,28 +55,27 @@ second principle. They are tools the workflow calls, not agents that reason.
 
 ## Status
 
-- **Advisory** runs standalone and returns recommendations from supplied
-  figures, without recomputing them.
-- **Card intelligence** runs standalone with a fetch tool and a schema-
-  constrained result. Verified on both paths that matter: given a real document
-  it extracts the full structure at 0.9 confidence, and asked about a card it
-  demonstrably knows from training with no document supplied, it returns
-  `{"rules": [], "confidence": 0}` rather than reciting one.
-- The FastAPI orchestrator remains the live path. Do not remove it until the
-  ADK pipeline is proven end to end.
+- ADK is the default FastAPI execution path for synchronous and asynchronous
+  runs; the built-in orchestrator remains an explicit fallback.
+- Card Intelligence persists due term refreshes to both wallet and global rule
+  documents before Strategy executes.
+- Forecast consumes Strategy's measured leakage, matching the fallback output.
+- Advisory uses the same replacement/suppression/expiry lifecycle as the
+  fallback and publishes only current-run recommendations.
+- Every node records queued/running/ok/degraded/failed telemetry with its real
+  reads, writes and duration.
 
 ## The pipeline
 
 `adk_agents/pipeline` composes all five agents as one graph:
 
 ```
-ingestion ─┬─> card_intelligence ─┐
-           └─> forecast ──────────┴─> strategy ─> advisory
+    ingestion -> card_intelligence -> strategy -> forecast -> advisory
 ```
 
-Card intelligence and forecast do not depend on each other, so the graph runs
-them concurrently. Strategy waits for both, because it prices what was ingested
-against the rules that were read.
+Forecast follows Strategy because its cost-of-inaction calculation consumes
+the measured reward leakage. The former parallel graph omitted that input and
+could not be output-compatible with the fallback.
 
 The three deterministic agents are `BaseAgent` subclasses, not tools. A tool is
 something a model chooses to call; these always run, in order, and handing that
@@ -102,9 +103,9 @@ a month" — which is the restraint the instruction asks for.
 curl -X POST localhost:8080/api/v1/runs -H 'Content-Type: application/json' -d '{"engine":"adk"}'
 ```
 
-`PIPELINE_ENGINE` sets the default and stays `orchestrator`. The graph is
-proven against the orchestrator rather than trusted over it, and keeping both
-means there is a working path if one breaks close to a deadline.
+`PIPELINE_ENGINE` defaults to `adk`. Set it to `orchestrator` for the fallback.
+Keeping both paths makes rollback immediate, while parity tests prevent their
+financial output and persistence contracts from drifting.
 
 Both write the same read model. Run one then the other and the figures match to
 the cent — spend, captured and unclaimed — which is what makes the switch safe:
@@ -116,6 +117,8 @@ timings are worth looking at: the deterministic nodes finish in 2-43ms while
 card intelligence takes 30 seconds, which is the whole argument for keeping
 three of five agents out of a language model.
 
-## Next
+## Verification
 
-- Nothing outstanding. The graph and the orchestrator are at parity.
+`tests/test_adk_parity.py` starts both engines from identical stores and checks
+the financial snapshot, card-rule refreshes, advice lifecycle, telemetry,
+async selection and failure persistence.

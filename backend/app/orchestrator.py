@@ -240,7 +240,7 @@ class Orchestrator:
         self.store.set_user(uid, {"lastRunId": run_id, "lastRunAt": snapshot["generatedAt"]})
         return run_id, snapshot
 
-    def queue_run(self, uid, run_id):
+    def queue_run(self, uid, run_id, *, engine="orchestrator"):
         """Persist a visible run before background execution begins."""
         queued_at = self._now()
         for agent, label in AGENTS:
@@ -257,6 +257,7 @@ class Orchestrator:
                 "writes": [],
                 "reads": [],
                 "retryable": False,
+                "engine": engine,
             })
 
     def empty_snapshot(self, uid):
@@ -613,8 +614,8 @@ class Orchestrator:
             return 0.0
         return min(1.0, max(0.0, float(totals.get("unclaimed") or 0) / spend))
 
-    def _start_stage(self, uid, run_id, agent, label, writes, reads):
-        self.store.write_agent_run(uid, f"{run_id}-{agent}", {
+    def _start_stage(self, uid, run_id, agent, label, writes, reads, *, engine=None):
+        entry = {
             "id": f"{run_id}-{agent}",
             "runId": run_id,
             "agent": agent,
@@ -627,11 +628,17 @@ class Orchestrator:
             "writes": writes,
             "reads": reads,
             "retryable": False,
-        })
+        }
+        if engine:
+            entry["engine"] = engine
+        self.store.write_agent_run(uid, f"{run_id}-{agent}", entry)
 
-    def _log(self, uid, run_id, agent, label, writes, reads, degraded=None, duration_ms=0, summary=None):
+    def _log(self, uid, run_id, agent, label, writes, reads, degraded=None, duration_ms=0, summary=None, *, engine=None):
         detail = "; ".join(degraded or []) or None
-        self.store.write_agent_run(uid, f"{run_id}-{agent}", {"id": f"{run_id}-{agent}", "runId": run_id, "agent": agent, "status": "degraded" if detail else "ok", "startedAt": self._now(), "durationMs": duration_ms, "summary": summary or f"{label} completed.", "detail": detail, "writes": writes, "reads": reads, "retryable": agent == "card-intelligence" and bool(detail)})
+        entry = {"id": f"{run_id}-{agent}", "runId": run_id, "agent": agent, "status": "degraded" if detail else "ok", "startedAt": self._now(), "durationMs": duration_ms, "summary": summary or f"{label} completed.", "detail": detail, "writes": writes, "reads": reads, "retryable": agent == "card-intelligence" and bool(detail)}
+        if engine:
+            entry["engine"] = engine
+        self.store.write_agent_run(uid, f"{run_id}-{agent}", entry)
 
     def _track_record(self, advice):
         acted = [a for a in advice if a.get("outcome") == "acted"]

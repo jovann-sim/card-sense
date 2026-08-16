@@ -34,6 +34,94 @@ type PlaidItem = {
   accounts: number;
 };
 
+function EditCardDetails({
+  card,
+  onSaved,
+  onCancel,
+}: {
+  card: CardDetail;
+  onSaved: (snapshot: Snapshot) => void;
+  onCancel: () => void;
+}) {
+  const [last4, setLast4] = useState(card.last4);
+  const [openedAt, setOpenedAt] = useState(card.openedAt ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cardId = card.walletId ?? card.id ?? card.cardId;
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    if (!cardId) {
+      setError("This card has no persisted ID. Reload the page and try again.");
+      return;
+    }
+    if (!/^\d{4}$/.test(last4)) {
+      setError("Enter exactly four digits from the end of the card number.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await api<{ card: CardDetail; snapshot: Snapshot }>(
+        `/api/v1/cards/${encodeURIComponent(cardId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ last4, openedAt: openedAt || null }),
+        },
+      );
+      onSaved(response.snapshot);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save those card details.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="addcard" onSubmit={save}>
+      <p className="addcard__title">Edit {card.name}</p>
+      <p className="addcard__lede">
+        These details identify the card and establish its welcome-bonus window.
+        Reward rules and the linked Plaid account will not change.
+      </p>
+      <div className="pform__grid">
+        <label className="field">
+          <span className="field__label">Last 4 digits</span>
+          <input
+            className="field__input"
+            value={last4}
+            onChange={(event) => setLast4(event.target.value.replace(/\D/g, "").slice(0, 4))}
+            inputMode="numeric"
+            pattern="[0-9]{4}"
+            minLength={4}
+            maxLength={4}
+            required
+          />
+        </label>
+        <label className="field">
+          <span className="field__label">Card opened date (optional)</span>
+          <input
+            className="field__input"
+            type="date"
+            value={openedAt}
+            onChange={(event) => setOpenedAt(event.target.value)}
+          />
+        </label>
+      </div>
+      {error && <p className="addcard__fine" role="alert">{error}</p>}
+      <div className="pform__actions">
+        <button type="submit" className="btn" disabled={busy}>
+          {busy ? "Saving…" : "Save details"}
+        </button>
+        <button type="button" className="btn btn--quiet" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function PlaidConnections({
   items,
   accounts,
@@ -182,6 +270,7 @@ function Wallet({
   linking,
   onRecheck,
   onLinkAccount,
+  onEdit,
   onManual,
   onRemove,
 }: {
@@ -192,6 +281,7 @@ function Wallet({
   linking: string | null;
   onRecheck: (card: CardDetail) => void;
   onLinkAccount: (card: CardDetail, accountId: string) => void;
+  onEdit: (card: CardDetail) => void;
   onManual: (card: CardDetail) => void;
   onRemove: (card: CardDetail) => void;
 }) {
@@ -296,6 +386,14 @@ function Wallet({
           <button
             type="button"
             className="btn btn--small btn--quiet"
+            onClick={() => onEdit(card)}
+          >
+            Edit card details
+          </button>
+
+          <button
+            type="button"
+            className="btn btn--small btn--quiet"
             onClick={() => onRemove(card)}
             disabled={removing}
           >
@@ -337,6 +435,10 @@ function Wallet({
             <div className="prov__pair">
               <dt>Last read</dt>
               <dd className="num">{dayMonth(card.source.retrievedAt)}</dd>
+            </div>
+            <div className="prov__pair">
+              <dt>Opened</dt>
+              <dd className="num">{card.openedAt ? dayMonth(card.openedAt) : "Not set"}</dd>
             </div>
             <div className="prov__pair">
               <dt>Rechecks</dt>
@@ -469,6 +571,7 @@ export function CardsView({
   const [wallet, setWallet] = useState(initialWallet);
   const [adding, setAdding] = useState(false);
   const [manualFor, setManualFor] = useState<CardDetail | null>(null);
+  const [editingFor, setEditingFor] = useState<CardDetail | null>(null);
   const [rechecking, setRechecking] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -550,6 +653,7 @@ export function CardsView({
 
   function openAdd() {
     setManualFor(null);
+    setEditingFor(null);
     setAdding(true);
     setTab("wallet");
   }
@@ -685,7 +789,7 @@ export function CardsView({
     }
   }
 
-  const showFlow = adding || manualFor !== null;
+  const showFlow = adding || manualFor !== null || editingFor !== null;
 
   return (
     <>
@@ -728,7 +832,18 @@ export function CardsView({
         )}
       </div>
 
-      {showFlow && (
+      {editingFor ? (
+        <EditCardDetails
+          key={editingFor.walletId ?? editingFor.id ?? editingFor.cardId}
+          card={editingFor}
+          onSaved={(snapshot) => {
+            setWallet(snapshot.wallet);
+            setEditingFor(null);
+            router.refresh();
+          }}
+          onCancel={() => setEditingFor(null)}
+        />
+      ) : showFlow && (
         <AddCardFlow
           manualFor={manualFor ?? undefined}
           onSaved={(nextWallet) => {
@@ -757,8 +872,14 @@ export function CardsView({
           linking={linkingId}
           onRecheck={recheck}
           onLinkAccount={linkAccount}
+          onEdit={(card) => {
+            setAdding(false);
+            setManualFor(null);
+            setEditingFor(card);
+          }}
           onManual={(card) => {
             setAdding(false);
+            setEditingFor(null);
             setManualFor(card);
           }}
           onRemove={removeCard}

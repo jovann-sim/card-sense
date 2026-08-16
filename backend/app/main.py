@@ -23,6 +23,7 @@ from .models import (
     GoalIn,
     AdviceResolveIn,
     CardIn,
+    CardMetadataIn,
     RunIn,
     LinkTokenIn,
     ExchangeTokenIn,
@@ -326,7 +327,15 @@ def forecast(months: int = Query(1, ge=1, le=12)):
     return result
 
 
-def _run_via_adk(uid: str, request: str) -> tuple[str, dict]:
+def _run_via_adk(
+    uid: str,
+    request: str,
+    *,
+    run_id: str | None = None,
+    active_orchestrator: Orchestrator | None = None,
+    refresh_advice: bool = True,
+    refresh_card_intelligence: bool = True,
+) -> tuple[str, dict]:
     """Execute the pipeline as an ADK graph and project the result.
 
     The graph's nodes persist to the same collections the orchestrator writes,
@@ -335,36 +344,82 @@ def _run_via_adk(uid: str, request: str) -> tuple[str, dict]:
     """
     from adk_agents.pipeline.runner import run_pipeline
 
-    run_id, _state = run_pipeline(uid, request)
-    snapshot = orch.project(uid, run_id)
-    store.set_snapshot(uid, snapshot)
-    store.set_user(uid, {"lastRunId": run_id, "lastRunAt": snapshot["generatedAt"]})
+    active = active_orchestrator or orch
+    run_id, _state = run_pipeline(
+        uid,
+        request,
+        run_id=run_id,
+        active_orchestrator=active,
+        refresh_advice=refresh_advice,
+        refresh_card_intelligence=refresh_card_intelligence,
+    )
+    snapshot = active.project(uid, run_id)
+    active.store.set_snapshot(uid, snapshot)
+    active.store.set_user(uid, {"lastRunId": run_id, "lastRunAt": snapshot["generatedAt"]})
     return run_id, snapshot
+
+
+def _run_selected(
+    uid: str,
+    request: str,
+    *,
+    engine: str | None = None,
+    run_id: str | None = None,
+    active_orchestrator: Orchestrator | None = None,
+    refresh_advice: bool = True,
+    refresh_card_intelligence: bool = True,
+) -> tuple[str, dict]:
+    """Run every full pipeline trigger through the configured engine."""
+    selected = engine or settings.pipeline_engine
+    active = active_orchestrator or (orch if orch.store is store else Orchestrator(store))
+    if selected == "adk":
+        return _run_via_adk(
+            uid,
+            request,
+            run_id=run_id,
+            active_orchestrator=active,
+            refresh_advice=refresh_advice,
+            refresh_card_intelligence=refresh_card_intelligence,
+        )
+    return active.run(
+        uid,
+        request,
+        run_id=run_id,
+        refresh_advice=refresh_advice,
+        refresh_card_intelligence=refresh_card_intelligence,
+    )
 
 
 @app.post("/api/v1/runs", response_model=RunResponse)
 def run_agents(body: RunIn):
-    engine = body.engine or settings.pipeline_engine
-    if engine == "adk":
-        run_id, snap = _run_via_adk(UID, body.request)
-    else:
-        run_id, snap = orch.run(UID, body.request)
+    run_id, snap = _run_selected(UID, body.request, engine=body.engine)
     return {"runId": run_id, "snapshot": snap}
 
 
-def _execute_background_run(active_orchestrator: Orchestrator, run_id: str, request: str):
+def _execute_background_run(
+    active_orchestrator: Orchestrator,
+    run_id: str,
+    request: str,
+    engine: str = "orchestrator",
+):
     try:
-        active_orchestrator.run(UID, request, run_id=run_id)
+        _run_selected(
+            UID,
+            request,
+            engine=engine,
+            run_id=run_id,
+            active_orchestrator=active_orchestrator,
+        )
     except Exception as exc:
         logger.exception("background agent run failed run_id=%s", run_id)
         entries = [
-            entry for entry in store.get_subcollection(UID, "agent_runs")
+            entry for entry in active_orchestrator.store.get_subcollection(UID, "agent_runs")
             if entry.get("runId") == run_id
         ]
         failed = next((entry for entry in entries if entry.get("status") == "running"), None)
         failed = failed or next((entry for entry in entries if entry.get("status") == "queued"), None)
         if failed:
-            store.write_agent_run(UID, failed["id"], {
+            active_orchestrator.store.write_agent_run(UID, failed["id"], {
                 "status": "failed",
                 "summary": f"{failed.get('label') or failed.get('agent')} failed.",
                 "detail": str(exc)[:300],
@@ -376,10 +431,17 @@ def _execute_background_run(active_orchestrator: Orchestrator, run_id: str, requ
 def start_agent_run(body: RunIn, background_tasks: BackgroundTasks):
     """Queue a real run and return its ID before agent work starts."""
     run_id = uuid.uuid4().hex
+    engine = body.engine or settings.pipeline_engine
     active_orchestrator = orch if orch.store is store else Orchestrator(store)
-    active_orchestrator.queue_run(UID, run_id)
-    background_tasks.add_task(_execute_background_run, active_orchestrator, run_id, body.request)
-    return {"runId": run_id, "status": "queued"}
+    active_orchestrator.queue_run(UID, run_id, engine=engine)
+    background_tasks.add_task(
+        _execute_background_run,
+        active_orchestrator,
+        run_id,
+        body.request,
+        engine,
+    )
+    return {"runId": run_id, "status": "queued", "engine": engine}
 
 
 @app.get("/api/v1/runs/{run_id}")
@@ -477,6 +539,7 @@ def _apply_parse(card: dict, card_id: str, parsed: dict) -> dict:
         "network": card["network"],
         "annualFee": parsed.get("annualFee") if parsed.get("annualFee") is not None else card.get("annualFee", 0),
         "track": card["track"],
+        "openedAt": card.get("openedAt"),
         "cardId": card_id,
         "accountId": card.get("accountId"),
         "accountAutoLinkDisabled": card.get("accountAutoLinkDisabled", False),
@@ -526,8 +589,27 @@ def add_card(body: CardIn):
         parsed = orch.cardintel.parse(card, previous)
 
     card_detail = _apply_parse(card, card_id, parsed)
-    _, snap = orch.run(UID, "Recalculate after card added")
+    _, snap = _run_selected(UID, "Recalculate after card added")
     return {"card": card_detail, "snapshot": snap}
+
+
+@app.patch("/api/v1/cards/{card_id}", response_model=CardResponse)
+def update_card_metadata(card_id: str, body: CardMetadataIn):
+    """Update user-entered identity without touching extracted card terms."""
+    card = store.get_subdoc(UID, "wallet", card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    store.set_subdoc(UID, "wallet", card_id, body.model_dump(mode="json"))
+    # Metadata can start or move a welcome-bonus window, so all deterministic
+    # projections and advice must be refreshed. The terms themselves did not
+    # change, and rereading them would add latency and risk replacing good rules.
+    _, snap = _run_selected(
+        UID,
+        "Recalculate after card details changed",
+        refresh_card_intelligence=False,
+    )
+    return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
 
 
 @app.post("/api/v1/cards/{card_id}/recheck", response_model=CardResponse)
@@ -542,7 +624,7 @@ def recheck_card(card_id: str):
     previous = store.get_global_doc("card_rules", card_id)
     parsed = orch.cardintel.parse({**card, "rules": None}, previous)
     card_detail = _apply_parse({**card, "termsUrl": card.get("termsUrl")}, card_id, parsed)
-    _, snap = orch.run(UID, "Recalculate after terms recheck")
+    _, snap = _run_selected(UID, "Recalculate after terms recheck")
     return {"card": card_detail, "snapshot": snap}
 
 
@@ -560,7 +642,7 @@ async def upload_terms(card_id: str, file: UploadFile = File(...)):
     document = document_from_upload(payload, file.filename or "uploaded terms")
     parsed = orch.cardintel.parse_document(document, card)
     card_detail = _apply_parse(card, card_id, parsed)
-    _, snap = orch.run(UID, "Recalculate after terms upload")
+    _, snap = _run_selected(UID, "Recalculate after terms upload")
     return {"card": card_detail, "snapshot": snap}
 
 
@@ -590,7 +672,7 @@ def link_card_account(card_id: str, body: dict):
         "accountId": account_id,
         "accountAutoLinkDisabled": False,
     })
-    _, snap = orch.run(UID, "Recalculate after linking an account")
+    _, snap = _run_selected(UID, "Recalculate after linking an account")
     return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
 
 
@@ -607,7 +689,7 @@ def unlink_card_account(card_id: str):
         # empty link was chosen deliberately instead of immediately undoing it.
         "accountAutoLinkDisabled": True,
     })
-    _, snap = orch.run(UID, "Recalculate after unlinking an account")
+    _, snap = _run_selected(UID, "Recalculate after unlinking an account")
     return {"card": store.get_subdoc(UID, "wallet", card_id), "snapshot": snap}
 
 
@@ -677,7 +759,7 @@ def delete_card(wallet_or_card_id: str):
         raise HTTPException(404, "Card not found in wallet")
     # Rules are global card knowledge; only remove this user's wallet reference.
     store.delete_subdoc(UID, "wallet", card.get("walletId") or card.get("id") or wallet_or_card_id)
-    _, snap = orch.run(
+    _, snap = _run_selected(
         UID,
         "Recalculate after card removed",
         refresh_advice=False,
@@ -978,7 +1060,7 @@ def plaid_sync(body: SyncIn):
         # Strategy has changed, so advice must be regenerated for this run.
         # Retaining an older run's open recommendations would make the
         # dashboard actionable but stale.
-        run_id, snap = orch.run(
+        run_id, snap = _run_selected(
             uid,
             "Analyse newly synced Plaid transactions",
         )
@@ -1011,9 +1093,10 @@ def disconnect_plaid_item(item_id: str):
         plaid_removed = _remove_plaid_item_remote(item)
         removed = _delete_plaid_item_data(UID, item)
         active_orchestrator = orch if orch.store is store else Orchestrator(store)
-        run_id, snapshot = active_orchestrator.run(
+        run_id, snapshot = _run_selected(
             UID,
             "Recalculate after disconnecting a Plaid Item",
+            active_orchestrator=active_orchestrator,
             refresh_advice=False,
             refresh_card_intelligence=False,
         )
@@ -1112,7 +1195,9 @@ def seed_realistic_demo(months: int = Query(12, ge=1, le=24),
         ],
     )
 
-    run_id, snapshot = orch.run(UID, "Seed realistic demo data", refresh_card_intelligence=False)
+    run_id, snapshot = _run_selected(
+        UID, "Seed realistic demo data", refresh_card_intelligence=False,
+    )
     return {
         "ok": True,
         "runId": run_id,
@@ -1183,7 +1268,7 @@ def scheduled_run(x_internal_secret: str | None = Header(default=None)):
         synced = plaid_sync(SyncIn(userId=UID))
         return {"runId": synced["runId"], "generatedAt": synced["snapshot"]["generatedAt"],
                 "plaid": {key: synced[key] for key in ("added", "modified", "removed")}}
-    run_id, snap = orch.run(UID, "Scheduled autonomous CardSense run")
+    run_id, snap = _run_selected(UID, "Scheduled autonomous CardSense run")
     return {"runId": run_id, "generatedAt": snap["generatedAt"]}
 
 
@@ -1196,5 +1281,5 @@ async def import_csv(file: UploadFile = File(...),
     rows = orch.ingestion.import_csv_records(
         UID, store, csv.DictReader(io.StringIO(content)), file.filename or "statement.csv"
     )
-    run_id, snap = orch.run(UID, "Analyse imported bank statement")
+    run_id, snap = _run_selected(UID, "Analyse imported bank statement")
     return {"imported": len(rows), "runId": run_id, "snapshot": snap}

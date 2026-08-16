@@ -140,12 +140,12 @@ Agents communicate through persisted state rather than direct agent-to-agent cal
 
 `transactions -> card_rules -> strategy_runs -> forecasts -> advice -> snapshots/current`
 
-The built-in orchestrator is the default and authoritative runtime. The ADK
-graph selected with `PIPELINE_ENGINE=adk` is experimental: its deterministic
-nodes share core implementations with the orchestrator, but Card Intelligence,
-Advisory persistence, leakage-aware forecasting, and run telemetry do not yet
-have complete parity. Do not use it as the production/default engine until
-those gaps are covered by contract tests.
+The ADK graph is the default runtime. Its five nodes delegate to the same core
+implementations as the built-in orchestrator and persist the same card-rule
+refreshes, leakage-aware forecasts, recommendation lifecycle, telemetry and
+snapshot contract. The orchestrator remains available with
+`PIPELINE_ENGINE=orchestrator` as a fallback. Parity tests run both engines from
+identical stores and compare their financial read models and persistence.
 
 Forecasts use a zero-filled daily spend rate over up to 90 trailing days and
 project a 30-day range from observed variability. Declared plans whose start

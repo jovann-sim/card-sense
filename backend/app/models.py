@@ -36,7 +36,7 @@ class AdviceResolveIn(BaseModel):
 
 class CardIn(BaseModel):
     name: str
-    last4: str = Field(min_length=4, max_length=4)
+    last4: str = Field(pattern=r"^\d{4}$")
     network: str
     annualFee: float = Field(default=0, ge=0)
     track: RewardTrack
@@ -48,6 +48,13 @@ class CardIn(BaseModel):
     termsText: str | None = None
     termsUrl: str | None = None
     rules: list[dict[str, Any]] | None = None
+
+
+class CardMetadataIn(BaseModel):
+    """User-owned card identity fields; extracted terms live elsewhere."""
+
+    last4: str = Field(pattern=r"^\d{4}$")
+    openedAt: date | None = None
 
 
 class RunIn(BaseModel):

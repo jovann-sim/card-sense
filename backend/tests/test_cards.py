@@ -1,6 +1,75 @@
+import pytest
+from pydantic import ValidationError
+
 from app.orchestrator import Orchestrator
 from app.store import Store
 from app import main
+from app.models import CardIn, CardMetadataIn
+
+
+def test_card_input_preserves_opening_date_and_requires_four_digits():
+    card = CardIn(
+        name="Card", last4="1234", network="Visa", track="cashback",
+        openedAt="2026-08-01",
+    )
+
+    assert card.model_dump(mode="json")["openedAt"] == "2026-08-01"
+
+    for invalid in ("", "123", "12345", "12a4"):
+        with pytest.raises(ValidationError):
+            CardIn(name="Card", last4=invalid, network="Visa", track="cashback")
+
+
+def test_adding_a_card_persists_its_opening_date(monkeypatch):
+    test_store = Store()
+    orchestrator = Orchestrator(test_store)
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "orch", orchestrator)
+
+    response = main.add_card(CardIn(
+        name="New Card", last4="1234", network="Visa", track="cashback",
+        openedAt="2026-08-01",
+        rules=[{"categoryLabel": "Dining", "rate": "3%"}],
+    ))
+
+    assert response["card"]["openedAt"] == "2026-08-01"
+    assert response["snapshot"]["wallet"][0]["openedAt"] == "2026-08-01"
+
+
+def test_editing_card_metadata_preserves_rules_provenance_and_linkage(monkeypatch):
+    test_store = Store()
+    rules = [{"id": "dining", "categoryLabel": "Dining", "rate": "3%"}]
+    source = {
+        "label": "Issuer terms", "locator": "https://example.test/terms",
+        "retrievedAt": "2026-08-01",
+    }
+    test_store.set_global_doc("card_rules", "card", {
+        "rules": rules, "source": source, "status": "parsed", "confidence": 1,
+    })
+    test_store.set_subdoc(main.UID, "wallet", "card", {
+        "cardId": "card", "name": "Card", "last4": "1111", "network": "Visa",
+        "annualFee": 0, "track": "cashback", "openedAt": None,
+        "accountId": "plaid-account", "accountAutoLinkDisabled": False,
+        "rules": rules, "source": source, "parseStatus": "parsed",
+        "parseConfidence": 1, "recheckCadence": "weekly",
+        "nextRecheckAt": "2026-08-22", "termsUrl": source["locator"],
+    })
+    orchestrator = Orchestrator(test_store)
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "orch", orchestrator)
+
+    response = main.update_card_metadata(
+        "card", CardMetadataIn(last4="9999", openedAt="2026-07-15"),
+    )
+    stored = test_store.get_subdoc(main.UID, "wallet", "card")
+
+    assert response["card"]["last4"] == "9999"
+    assert response["snapshot"]["wallet"][0]["openedAt"] == "2026-07-15"
+    assert stored["rules"] == rules
+    assert stored["source"] == source
+    assert stored["accountId"] == "plaid-account"
+    assert stored["termsUrl"] == source["locator"]
+    assert test_store.get_global_doc("card_rules", "card")["rules"] == rules
 
 
 def test_removing_wallet_card_keeps_global_rules():
