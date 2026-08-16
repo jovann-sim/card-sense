@@ -635,6 +635,9 @@ class Orchestrator:
 
     def _track_record(self, advice):
         acted = [a for a in advice if a.get("outcome") == "acted"]
+        superseded = [a for a in advice if a.get("invalidatedByRunId")]
+        actionable = [a for a in advice if not a.get("invalidatedByRunId")]
+        open_advice = [a for a in actionable if a.get("outcome") == "open"]
         records = []
         for item in advice:
             record = {key: value for key, value in item.items() if key in {"id", "runId", "invalidatedByRunId", "outcome", "pushedAt", "resolvedAt", "headline", "card", "predicted", "actual", "window", "gapReason"}}
@@ -650,7 +653,19 @@ class Orchestrator:
                 and not item.get("invalidatedByRunId")
             )
         ]
-        return {"taken": len(acted), "offered": len(advice), "earned": round(sum(_numeric_advice_value(a.get("actual")) for a in acted), 2), "missed": round(sum(_numeric_advice_value(a.get("predicted")) for a in missed), 2), "accuracyNote": "Actual earnings are recorded after recommendation windows close.", "records": records}
+        return {
+            "taken": len(acted),
+            # A later run can invalidate advice before the user has a fair
+            # chance to act on it. Preserve those records for auditability, but
+            # do not count them as recommendations the user declined to take.
+            "offered": len(actionable),
+            "open": len(open_advice),
+            "superseded": len(superseded),
+            "earned": round(sum(_numeric_advice_value(a.get("actual")) for a in acted), 2),
+            "missed": round(sum(_numeric_advice_value(a.get("predicted")) for a in missed), 2),
+            "accuracyNote": "Actual earnings are recorded after recommendation windows close.",
+            "records": records,
+        }
 
     def _replace_advice(self, uid, run_id, generated):
         """Publish one run's advice and retire open advice it no longer supports."""

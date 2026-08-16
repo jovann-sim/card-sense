@@ -161,6 +161,30 @@ def test_track_record_tolerates_non_numeric_model_values():
     assert orchestrator._recommendation(advice[0])["impact"] == 0
 
 
+def test_track_record_separates_superseded_advice_from_valid_offers():
+    orchestrator = Orchestrator(Store())
+    advice = [
+        {"id": "open", "outcome": "open", "predicted": 4},
+        {"id": "acted", "outcome": "acted", "predicted": 5, "actual": 6},
+        {"id": "dismissed", "outcome": "dismissed", "predicted": 7},
+        {"id": "expired", "outcome": "expired", "predicted": 8},
+        {
+            "id": "superseded", "outcome": "expired", "predicted": 100,
+            "invalidatedByRunId": "newer-run",
+        },
+    ]
+
+    record = orchestrator._track_record(advice)
+
+    assert record["taken"] == 1
+    assert record["offered"] == 4
+    assert record["open"] == 1
+    assert record["superseded"] == 1
+    assert record["earned"] == 6
+    assert record["missed"] == 15
+    assert len(record["records"]) == 5
+
+
 def test_agent_run_replaces_stale_open_advice_by_run_id():
     store = Store()
     orchestrator = Orchestrator(store)
@@ -212,6 +236,9 @@ def test_agent_run_replaces_stale_open_advice_by_run_id():
     assert dismissed["runId"] == "old-run"
     # Superseding stale advice is not counted as a user missing valid advice.
     assert snapshot["trackRecord"]["missed"] == 3
+    assert snapshot["trackRecord"]["offered"] == 3
+    assert snapshot["trackRecord"]["open"] == 2
+    assert snapshot["trackRecord"]["superseded"] == 1
 
 
 def test_skipped_advisory_expires_open_advice_instead_of_retaining_it():

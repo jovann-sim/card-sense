@@ -8,6 +8,12 @@ import { dayMonth, money } from "@/lib/format";
  * that can be checked, so it gets stated before anything is asked of the user.
  */
 export function TrackRecordStrip({ record }: { record: TrackRecord }) {
+  const open = record.open ?? record.records.filter(
+    (r) => r.outcome === "open" && !r.invalidatedByRunId,
+  ).length;
+  const superseded = record.superseded ?? record.records.filter(
+    (r) => Boolean(r.invalidatedByRunId),
+  ).length;
   const lastClosed = record.records.find(
     (r) => r.outcome === "acted" && r.actual !== undefined,
   );
@@ -18,9 +24,11 @@ export function TrackRecordStrip({ record }: { record: TrackRecord }) {
         <p className="record__label">Track record</p>
         <p className="record__line">
           <span className="record__value">
-            {record.taken} of {record.offered}
+            {open} open
           </span>{" "}
-          taken ·{" "}
+          · <span className="record__value">{record.taken} taken</span>{" "}
+          · <span className="record__value">{superseded} superseded</span>{" "}
+          ·{" "}
           <span className="record__value record__value--good">
             {money(record.earned)}
           </span>{" "}

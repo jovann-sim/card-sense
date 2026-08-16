@@ -617,6 +617,8 @@ export const snapshot: Snapshot = {
   trackRecord: {
     taken: 5,
     offered: 10,
+    open: 3,
+    superseded: 0,
     earned: 258.4,
     missed: 29.3,
     accuracyNote:

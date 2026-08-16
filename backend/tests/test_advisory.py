@@ -114,3 +114,87 @@ def test_setup_actions_use_real_cards_and_do_not_claim_an_unknown_impact():
     assert result[0]["impact"] == 0
     assert result[0]["impactWindow"] == "unknown until verified"
     assert "0000" not in str(result[0])
+
+
+def test_plan_actions_use_the_held_cards_real_identifier():
+    simulation = {
+        "steps": [{
+            "kind": "reassign",
+            "rank": 1,
+            "value": 76.97,
+            "valueWindow": "over the period priced",
+            "card": "Dining Card",
+            "title": "Move dining to Dining Card",
+            "detail": "Dining Card earns more on this spending.",
+        }],
+    }
+
+    result = AdvisoryAgent(WordingRuntime()).run(
+        {"categories": []}, {}, WALLET, simulation=simulation,
+    )
+
+    assert len(result) == 1
+    assert result[0]["card"] == {"name": "Dining Card", "last4": "1234"}
+    assert "0000" not in str(result[0])
+
+
+def test_plan_actions_do_not_invent_an_identifier_for_an_unheld_card():
+    simulation = {
+        "steps": [{
+            "kind": "acquire",
+            "rank": 1,
+            "value": 100.0,
+            "valueWindow": "per year, net of fee",
+            "title": "Consider a new card",
+            "detail": "This unheld card would improve annual rewards.",
+        }],
+    }
+
+    result = AdvisoryAgent(WordingRuntime()).run(
+        {"categories": []}, {}, WALLET, simulation=simulation,
+    )
+
+    assert len(result) == 1
+    assert result[0]["card"] is None
+    assert "0000" not in str(result[0])
+
+
+def welcome_progress(card="Dining Card"):
+    return {
+        "card": card,
+        "state": "at-risk",
+        "qualifyingSpend": 3_000.0,
+        "minSpend": 4_000.0,
+        "gap": 1_000.0,
+        "daysLeft": 10,
+        "perDayNeeded": 100.0,
+        "perDayCurrent": 50.0,
+        "valueUsd": 600.0,
+        "deadline": "2026-08-26",
+        "award": 60_000,
+        "unit": "points",
+        "transactions": 12,
+        "openedAt": "2026-05-28",
+        "rescue": None,
+    }
+
+
+def test_welcome_actions_use_the_held_cards_real_identifier():
+    result = AdvisoryAgent(WordingRuntime()).run(
+        {"categories": []}, {}, WALLET, welcome=[welcome_progress()],
+    )
+
+    assert len(result) == 1
+    assert result[0]["card"] == {"name": "Dining Card", "last4": "1234"}
+    assert "0000" not in str(result[0])
+
+
+def test_welcome_actions_do_not_invent_an_identifier_for_an_unknown_card():
+    result = AdvisoryAgent(WordingRuntime()).run(
+        {"categories": []}, {}, WALLET,
+        welcome=[welcome_progress(card="Unknown Card")],
+    )
+
+    assert len(result) == 1
+    assert result[0]["card"] is None
+    assert "0000" not in str(result[0])

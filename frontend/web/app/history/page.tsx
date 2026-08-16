@@ -62,10 +62,16 @@ function Row({ record }: { record: AdviceRecord }) {
 export default async function HistoryPage() {
   const snapshot = await getSnapshot();
   const { trackRecord } = snapshot;
-  const open = trackRecord.records.filter((r) => r.outcome === "open");
+  const open = trackRecord.records.filter(
+    (r) => r.outcome === "open" && !r.invalidatedByRunId,
+  );
   const closed = trackRecord.records.filter((r) => r.outcome === "acted");
   const notTaken = trackRecord.records.filter(
-    (r) => r.outcome === "expired" || r.outcome === "dismissed",
+    (r) => !r.invalidatedByRunId &&
+      (r.outcome === "expired" || r.outcome === "dismissed"),
+  );
+  const superseded = trackRecord.records.filter(
+    (r) => Boolean(r.invalidatedByRunId),
   );
 
   return (
@@ -83,7 +89,7 @@ export default async function HistoryPage() {
         </h1>
 
         <p className="hero__sub">
-          {trackRecord.taken} of {trackRecord.offered} recommendations taken.{" "}
+          {open.length} open · {trackRecord.taken} taken · {superseded.length} superseded.{" "}
           {money(trackRecord.missed)} went unclaimed on the ones that did not.{" "}
           {trackRecord.accuracyNote}
         </p>
@@ -121,6 +127,21 @@ export default async function HistoryPage() {
             ))}
           </ol>
         </section>
+
+        {superseded.length > 0 && (
+          <section className="section">
+            <h2 className="section__label">Superseded by later analysis</h2>
+            <p className="section__note">
+              These remain in the audit trail, but are not counted as advice you
+              chose not to take.
+            </p>
+            <ol className="rec-rows" style={{ marginTop: "1.75rem" }}>
+              {superseded.map((r) => (
+                <Row key={r.id} record={r} />
+              ))}
+            </ol>
+          </section>
+        )}
       </div>
     </main>
   );

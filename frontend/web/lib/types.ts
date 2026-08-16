@@ -437,6 +437,10 @@ export interface AdviceRecord {
 export interface TrackRecord {
   taken: number;
   offered: number;
+  /** Recommendations that remain actionable now. Optional on older snapshots. */
+  open?: number;
+  /** Advice retired because a later run no longer supported it. */
+  superseded?: number;
   earned: number;
   missed: number;
   accuracyNote: string;
