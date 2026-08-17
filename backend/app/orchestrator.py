@@ -114,12 +114,16 @@ class Orchestrator:
     """Runs independent stages through persisted state; projection is the only UI-shape owner."""
     def __init__(self, store):
         self.store = store
-        runtime = GeminiRuntime()
+        runtime = GeminiRuntime(store)
+        self.runtime = runtime
         self.ingestion = IngestionAgent()
         self.forecast = ForecastAgent()
         self.strategy = StrategyAgent()
         self.advisory = AdvisoryAgent(runtime)
         self.cardintel = CardIntelligenceAgent(runtime)
+
+    def model_context(self, uid, run_id, agent, *, source="pipeline"):
+        return self.runtime.context(uid, run_id, agent, source=source)
 
     def run(
         self,
@@ -157,7 +161,8 @@ class Orchestrator:
         stage_started = perf_counter()
         self._start_stage(uid, run_id, "card-intelligence", "Card intelligence", "card_rules", ["wallet"])
         if refresh_card_intelligence:
-            wallet, reread, card_notes = self._recheck_due(uid, wallet)
+            with self.model_context(uid, run_id, "card-intelligence"):
+                wallet, reread, card_notes = self._recheck_due(uid, wallet)
             card_summary = f"Reread {reread} of {len(wallet)} cards." if reread else "No cards were due a recheck."
         else:
             reread, card_notes = 0, []
@@ -206,7 +211,8 @@ class Orchestrator:
                 strategy.get("routable", []), welcome_now,
                 service_id=strategy.get("routingService"),
             )
-            advice = self.advisory.run(strategy, forecast, wallet, welcome_now, welcome_plan)
+            with self.model_context(uid, run_id, "advisory"):
+                advice = self.advisory.run(strategy, forecast, wallet, welcome_now, welcome_plan)
             published, expired, suppressed = self._replace_advice(
                 uid, run_id, advice,
             )

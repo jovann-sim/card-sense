@@ -108,6 +108,8 @@ The architecture intentionally keeps Plaid access tokens server-side and never e
 - `POST /api/v1/runs`
 - `POST /api/v1/runs/async`
 - `GET /api/v1/runs/{run_id}`
+- `GET /api/v1/quality/agents`
+- `POST /api/v1/quality/agents/evaluate`
 - `POST /api/v1/planned`
 - `DELETE /api/v1/planned/{planned_id}`
 - `POST /api/v1/goals`
@@ -133,6 +135,8 @@ The architecture intentionally keeps Plaid access tokens server-side and never e
 
 The scheduler and reset endpoints require `X-Internal-Secret`; replace the
 default secret and use service-to-service identity before deployment.
+Forcing a new golden evaluation also requires `X-Internal-Secret`; reading the
+latest quality report does not.
 
 ## Agent coordination
 
@@ -177,6 +181,47 @@ against the dashboard contract before they leave the API.
 Transactions must include an `accountId` that matches a held card's optional
 `accountId` before the service will claim an actual reward amount. Unmapped
 transactions are surfaced as degraded rather than assigned a placeholder rate.
+
+## Agent evaluations
+
+The deterministic golden suite scores every production agent without calling
+Plaid or Gemini:
+
+```bash
+.venv/bin/python -m evals.run_agent_evals
+```
+
+Its 15 hand-auditable cases cover normalization and coverage gaps, structured
+card-rule projection and abstention, reward arithmetic and cap step-downs,
+forecast exclusions and leakage cost, plus Advisory grounding against invented
+cards and amounts. It reports per-agent case counts, assertion counts, latency,
+and unsupported claims, and exits nonzero if a quality gate fails. Use
+`--json` for a machine-readable CI artifact or `--agent strategy` to isolate a
+stage.
+
+`GET /api/v1/quality/agents` persists the golden result by corpus fingerprint
+and combines it with real `agent_runs` telemetry. The Activity page shows
+run-level degradation/failure frequency, median run and stage latency, engine
+counts, and recommendation error only when persisted outcomes include both a
+prediction and an actual value. Gemini calls record input, output and thinking
+tokens, latency, status, model, agent and run ID in `model_calls`. Prompts,
+documents, payloads and responses are never stored in telemetry.
+
+Cost is estimated from the per-million-token Vertex AI rates configured with
+`GEMINI_INPUT_USD_PER_MILLION`, `GEMINI_OUTPUT_USD_PER_MILLION`, and
+`GEMINI_THINKING_USD_PER_MILLION`. Each call stores the rates used at that time,
+so changing configuration does not rewrite historical estimates. The defaults
+match the published Gemini 2.5 Flash Vertex AI text rates as checked on
+2026-08-17; review them against the
+[official Vertex AI pricing page](https://cloud.google.com/vertex-ai/generative-ai/pricing)
+before deployment.
+
+The separate Gemini extraction corpus is intentionally opt-in because it costs
+money and requires Google Cloud credentials:
+
+```bash
+.venv/bin/python -m evals.run_extraction_eval
+```
 
 ## Plaid transactions
 

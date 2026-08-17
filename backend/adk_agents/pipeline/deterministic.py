@@ -56,7 +56,10 @@ class PipelineStage(BaseAgent):
                 self.writes, self.reads, engine="adk",
             )
         try:
-            result, summary, degraded = self._execute(orchestrator)
+            with orchestrator.model_context(
+                self.uid, self.run_id or None, self.agent_id,
+            ):
+                result, summary, degraded = self._execute(orchestrator)
             ctx.session.state[self.state_key] = result
             if self.run_id:
                 orchestrator._log(

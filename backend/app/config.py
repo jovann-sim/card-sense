@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     google_cloud_project: str | None = None
     google_cloud_location: str = "global"
     finance_agent_model: str = "gemini-2.5-flash"
+    # Vertex AI list prices in USD per million tokens. Kept configurable and
+    # copied onto each usage record so historical estimates remain auditable.
+    gemini_input_usd_per_million: float = 0.15
+    gemini_output_usd_per_million: float = 0.60
+    gemini_thinking_usd_per_million: float = 3.50
     firestore_database: str = "(default)"
     snapshot_cache_ttl_seconds: float = 10.0
     plaid_client_id: str | None = None

@@ -35,6 +35,7 @@ from .models import (
 )
 from .orchestrator import AGENTS, Orchestrator, READ_MODEL_VERSION, project_catalog
 from .plaid_client import get_plaid_client
+from .quality import build_quality_report
 
 app = FastAPI(title="CardSense Backend", version="0.2.0")
 logger = logging.getLogger("cardsense")
@@ -478,6 +479,19 @@ def run_status(run_id: str):
     }
 
 
+@app.get("/api/v1/quality/agents")
+def agent_quality():
+    """Golden quality gates plus evidence from actual persisted agent runs."""
+    return build_quality_report(store, UID)
+
+
+@app.post("/api/v1/quality/agents/evaluate")
+def evaluate_agent_quality(x_internal_secret: str | None = Header(default=None)):
+    """Force the deterministic golden suite to rerun and persist its result."""
+    _require_internal(x_internal_secret)
+    return build_quality_report(store, UID, force_golden=True)
+
+
 @app.post("/api/v1/planned", response_model=Snapshot)
 def add_planned(body: PlannedItemIn):
     item = {"id": uuid.uuid4().hex, **body.model_dump(mode="json")}
@@ -586,7 +600,8 @@ def add_card(body: CardIn):
         }
     else:
         previous = store.get_global_doc("card_rules", card_id)
-        parsed = orch.cardintel.parse(card, previous)
+        with orch.model_context(UID, None, "card-intelligence", source="card-add"):
+            parsed = orch.cardintel.parse(card, previous)
 
     card_detail = _apply_parse(card, card_id, parsed)
     _, snap = _run_selected(UID, "Recalculate after card added")
@@ -622,7 +637,8 @@ def recheck_card(card_id: str):
         raise HTTPException(status_code=400, detail="This card has no terms link to reread.")
 
     previous = store.get_global_doc("card_rules", card_id)
-    parsed = orch.cardintel.parse({**card, "rules": None}, previous)
+    with orch.model_context(UID, None, "card-intelligence", source="card-recheck"):
+        parsed = orch.cardintel.parse({**card, "rules": None}, previous)
     card_detail = _apply_parse({**card, "termsUrl": card.get("termsUrl")}, card_id, parsed)
     _, snap = _run_selected(UID, "Recalculate after terms recheck")
     return {"card": card_detail, "snapshot": snap}
@@ -640,7 +656,8 @@ async def upload_terms(card_id: str, file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="The uploaded file was empty.")
 
     document = document_from_upload(payload, file.filename or "uploaded terms")
-    parsed = orch.cardintel.parse_document(document, card)
+    with orch.model_context(UID, None, "card-intelligence", source="terms-upload"):
+        parsed = orch.cardintel.parse_document(document, card)
     card_detail = _apply_parse(card, card_id, parsed)
     _, snap = _run_selected(UID, "Recalculate after terms upload")
     return {"card": card_detail, "snapshot": snap}

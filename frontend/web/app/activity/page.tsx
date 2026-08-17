@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import type { AgentId, AgentLogEntry } from "@/lib/types";
 import { longDay, timeOfDay } from "@/lib/format";
-import { getSnapshot } from "@/lib/api";
+import { getAgentQuality, getSnapshot } from "@/lib/api";
+import { AgentQuality } from "@/components/AgentQuality";
 
 export const metadata: Metadata = {
   title: "CardSense — Agent activity",
@@ -25,7 +26,7 @@ function groupByDay(entries: AgentLogEntry[]) {
 }
 
 export default async function ActivityPage() {
-  const snapshot = await getSnapshot();
+  const [snapshot, quality] = await Promise.all([getSnapshot(), getAgentQuality()]);
   const days = groupByDay(snapshot.activity);
   const degraded = snapshot.activity.filter((e) => e.status === "degraded");
   const hasActivity = snapshot.activity.length > 0;
@@ -61,6 +62,8 @@ export default async function ActivityPage() {
       </section>
 
       <div className="shell">
+        <AgentQuality quality={quality} />
+
         {!hasActivity && (
           <section className="section">
             <h2 className="section__label">Run history</h2>

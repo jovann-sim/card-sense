@@ -61,6 +61,12 @@ closed: unreadable or low-confidence terms are excluded instead of guessed.
 - Sandbox-only full reset and scoped Plaid disconnect
 - Chrome extension recommendations from the live merchant advisory endpoint,
   with conservative merchant matching and explicit unavailable/unknown states
+- Auditable golden evaluations for all five agents, with exact financial,
+  grounding, abstention, and recovery quality gates
+- Activity-page quality reporting for golden results, real run degradation and
+  failures, per-agent latency, engine usage, and measured recommendation error
+- Privacy-safe Gemini telemetry linked to agent/run IDs, including input,
+  output and thinking tokens, call outcomes, latency, and estimated USD cost
 
 ## Important limitations
 
@@ -115,6 +121,9 @@ PLAID_SECRET=...
 PLAID_ENV=sandbox
 GOOGLE_CLOUD_PROJECT=...
 GEMINI_ENABLED=true
+GEMINI_INPUT_USD_PER_MILLION=0.15
+GEMINI_OUTPUT_USD_PER_MILLION=0.60
+GEMINI_THINKING_USD_PER_MILLION=3.50
 PIPELINE_ENGINE=adk
 SNAPSHOT_CACHE_TTL_SECONDS=10
 INTERNAL_RUN_SECRET=replace-this
@@ -138,6 +147,7 @@ selects local storage; it does not disable Plaid Sandbox or Gemini.
 
 ```bash
 cd backend && pytest -q
+cd backend && .venv/bin/python -m evals.run_agent_evals
 cd frontend/web && npm run lint
 cd frontend/web && npx tsc --noEmit
 cd frontend/web && npm run build

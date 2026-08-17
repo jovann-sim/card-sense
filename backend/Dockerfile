@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY adk_agents ./adk_agents
+COPY evals ./evals
 COPY data ./data
 
 # Cloud Run runs containers as an unprivileged user by convention; doing it

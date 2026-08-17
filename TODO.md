@@ -2,10 +2,12 @@
 
 ## Now: agent quality
 
-- [ ] Add golden evaluation cases for ingestion, card intelligence, strategy, forecast, and advisory outputs.
-- [ ] Measure recommendation correctness, unsupported claims, degraded-run frequency, latency, and model cost.
+- [x] Add golden evaluation cases for ingestion, card intelligence, strategy, forecast, and advisory outputs.
+- [x] Report golden correctness, unsupported claims, degraded/failed-run frequency, latency, and measured recommendation error.
+- [x] Record privacy-safe Gemini token usage, run correlation, failures, latency, and configurable estimated cost.
+- [ ] Run and persist the live Gemini extraction corpus on a scheduled or release-gated basis.
 - [ ] Test retry and recovery behavior for individual ADK stage failures.
-- [ ] Surface the selected pipeline engine and useful failure details in the activity UI.
+- [x] Surface pipeline engine usage, quality gates, latency, and failure/degradation evidence in the activity UI.
 - [ ] Add regression cases for minimum spend, reward caps, enrolment requirements, promotions, merchant channels, and statement cycles.
 - [ ] Replace placeholder point and mile valuations with sourced, dated assumptions where possible.
 
@@ -43,6 +45,7 @@
 
 ## Release verification
 
+- [ ] Run `cd backend && .venv/bin/python -m evals.run_agent_evals`.
 - [ ] Run `cd backend && .venv/bin/python -m pytest tests -q`.
 - [ ] Run `cd frontend/web && npm run lint`.
 - [ ] Run `cd frontend/web && npx tsc --noEmit`.

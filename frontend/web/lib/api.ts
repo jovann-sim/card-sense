@@ -3,7 +3,7 @@ import { cache } from "react";
 import { connection } from "next/server";
 
 import { snapshot as mockSnapshot } from "@/lib/mock";
-import type { Forecast, Snapshot } from "@/lib/types";
+import type { AgentQualityReport, Forecast, Snapshot } from "@/lib/types";
 import {
   SNAPSHOT_CACHE_TAG,
   SNAPSHOT_REVALIDATE_SECONDS,
@@ -96,6 +96,28 @@ export const getForecast = cache(async (months: number): Promise<Forecast | null
     if (!response.ok) return null;
     const payload = (await response.json()) as Forecast;
     return typeof payload?.projectedSpend === "number" ? payload : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+/** Quality is separate from the financial snapshot because evaluations and
+ * run telemetry have their own lifecycle and must not invalidate money views. */
+export const getAgentQuality = cache(async (): Promise<AgentQualityReport | null> => {
+  const baseUrl = process.env.CARDSENSE_API_URL ?? "http://localhost:8080";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/quality/agents`, {
+      headers: { Accept: "application/json" },
+      next: { revalidate: SNAPSHOT_REVALIDATE_SECONDS },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as AgentQualityReport;
+    return payload?.golden && payload?.live ? payload : null;
   } catch {
     return null;
   } finally {

@@ -14,7 +14,7 @@ class Store:
     USER_COLLECTIONS = {
         "transactions", "planned", "wallet", "catalog", "plaid_items",
         "plaid_accounts", "forecasts", "strategy_runs", "advice",
-        "agent_runs", "snapshots",
+        "agent_runs", "model_calls", "quality_reports", "snapshots",
     }
 
     def __init__(self, persist: bool = False):

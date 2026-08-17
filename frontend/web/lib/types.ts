@@ -580,6 +580,74 @@ export interface CollectionLink {
   readBy: AgentId[];
 }
 
+export interface GoldenAgentQuality {
+  casesPassed: number;
+  casesTotal: number;
+  assertionsPassed: number;
+  assertionsTotal: number;
+  durationMs: number;
+  unsupportedClaims: number;
+}
+
+export interface AgentQualityReport {
+  generatedAt: ISODate;
+  golden: {
+    suiteFingerprint: string;
+    evaluatedAt: ISODate;
+    passed: boolean;
+    casesPassed: number;
+    casesTotal: number;
+    assertionsPassed: number;
+    assertionsTotal: number;
+    unsupportedClaims: number;
+    agents: Record<AgentId, GoldenAgentQuality>;
+  };
+  live: {
+    runsObserved: number;
+    terminalRuns: number;
+    degradedRuns: number;
+    failedRuns: number;
+    degradedRate: number | null;
+    failedRate: number | null;
+    medianRunDurationMs: number | null;
+    engines: Record<string, number>;
+    agents: Array<{
+      id: AgentId;
+      executions: number;
+      degraded: number;
+      failed: number;
+      medianDurationMs: number | null;
+    }>;
+  };
+  outcomes: {
+    status: "measured" | "not-measured";
+    evaluated: number;
+    meanAbsoluteError: number | null;
+    note: string;
+  };
+  modelCost: {
+    status: "measured" | "not-measured";
+    calls: number;
+    successfulCalls: number;
+    failedCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    thinkingTokens: number;
+    totalTokens: number;
+    estimatedUsd: number | null;
+    models: Record<string, number>;
+    agents: Array<{
+      id: "card-intelligence" | "advisory";
+      calls: number;
+      inputTokens: number;
+      outputTokens: number;
+      thinkingTokens: number;
+      estimatedUsd: number;
+    }>;
+    note: string;
+  };
+}
+
 /* ----------------------------------------------------------- snapshot ----- */
 
 export interface Snapshot {
