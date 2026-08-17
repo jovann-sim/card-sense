@@ -8,8 +8,8 @@ shows recommendations with an agent trace.
 The current repository is a working hackathon prototype, not a production
 financial service. Plaid Sandbox and CSV ingestion are functional. The web
 dashboard is connected to the backend. Authentication, production Plaid
-hardening, exact reward-condition simulation, and the extension's live
-recommendation call remain future work.
+hardening, exact reward-condition simulation, and comprehensive agent-quality
+evaluation remain future work.
 
 ## Current runtime
 
@@ -59,6 +59,8 @@ closed: unreadable or low-confidence terms are excluded instead of guessed.
 - Local JSON persistence in demo mode and Firestore in non-demo mode
 - Typed and validated `Snapshot` contract shared by FastAPI and Next.js
 - Sandbox-only full reset and scoped Plaid disconnect
+- Chrome extension recommendations from the live merchant advisory endpoint,
+  with conservative merchant matching and explicit unavailable/unknown states
 
 ## Important limitations
 
@@ -69,8 +71,6 @@ closed: unreadable or low-confidence terms are excluded instead of guessed.
 - Reward-unit valuations include stated assumptions and fallbacks.
 - ADK is the default pipeline engine; the deterministic orchestrator remains
   available as a fallback through `PIPELINE_ENGINE=orchestrator`.
-- The Chrome extension popup still uses a fixed recommendation and is not
-  connected to the backend.
 - Catalogue `deltaVsWallet` values are not yet calculated by a new-card
   simulation.
 - FastAPI background tasks are not a durable production job queue.

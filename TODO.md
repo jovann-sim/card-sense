@@ -1,21 +1,6 @@
 # CardSense TODO
 
-## Now
-
-- [ ] Review and commit the completed ADK parity, card editing, and dependency updates.
-- [ ] Restart the backend with `backend/.venv` and smoke-test card editing, Plaid sync, and an ADK run from the website.
-
-## Next: live checkout recommendations
-
-- [ ] Replace the Chrome extension's fixed recommendation with a backend request.
-- [ ] Define a checkout recommendation endpoint that accepts merchant/domain, amount, currency, and optional category.
-- [ ] Match the merchant to an MCC or reward category without inventing unsupported precision.
-- [ ] Return the best held card, expected reward, comparison against alternatives, and a short explanation.
-- [ ] Add extension loading, backend-unavailable, unsupported-merchant, and no-eligible-card states.
-- [ ] Ensure the extension never receives Plaid access tokens or other server credentials.
-- [ ] Add backend contract tests and extension tests for several merchant categories and reward-rule edge cases.
-
-## Agent quality
+## Now: agent quality
 
 - [ ] Add golden evaluation cases for ingestion, card intelligence, strategy, forecast, and advisory outputs.
 - [ ] Measure recommendation correctness, unsupported claims, degraded-run frequency, latency, and model cost.
@@ -23,6 +8,13 @@
 - [ ] Surface the selected pipeline engine and useful failure details in the activity UI.
 - [ ] Add regression cases for minimum spend, reward caps, enrolment requirements, promotions, merchant channels, and statement cycles.
 - [ ] Replace placeholder point and mile valuations with sourced, dated assumptions where possible.
+
+## Extension follow-ups
+
+- [ ] Make the backend origin configurable instead of hard-coding `http://localhost:8080`.
+- [ ] Add automated popup/content-script tests for known merchants, unknown merchants, unreadable rules, and backend failures.
+- [ ] Bundle extension fonts locally so the popup renders without a network font request.
+- [ ] Package and document a production extension build after authentication is available.
 
 ## Recommendation improvements
 

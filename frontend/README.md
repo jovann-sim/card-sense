@@ -85,8 +85,11 @@ development it falls back to [web/lib/mock.ts](web/lib/mock.ts) if the API is
 unavailable; production fails visibly instead of showing fake data.
 
 **Extension.** The seam is `getVerdict()` in
-[extension/popup.js](extension/popup.js). It returns a fixed object today;
-point it at the Advisory Agent's endpoint and keep the shape.
+[extension/popup.js](extension/popup.js). It sends only the current site URL
+and merchant name to `POST /api/v1/advise/merchant`, then renders the winning
+held card, runner-up, confidence caveat, and agent trace. Unknown merchants,
+unreadable rules, and an unavailable backend produce explicit empty states
+instead of a guessed recommendation.
 
 ## Decisions worth knowing before you edit
 
