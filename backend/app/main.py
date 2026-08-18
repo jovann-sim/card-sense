@@ -1161,8 +1161,7 @@ def disconnect_plaid_item(item_id: str):
 @app.post("/api/v1/demo/reset")
 def reset_demo(x_internal_secret: str | None = Header(default=None)):
     """Return the single-user sandbox demo to a fresh zero-value snapshot."""
-    if x_internal_secret != settings.internal_run_secret:
-        raise HTTPException(401, "Unauthorized")
+    _require_internal(x_internal_secret)
     if not settings.demo_mode or settings.plaid_env.lower() != "sandbox":
         raise HTTPException(403, "Demo reset is available only in DEMO_MODE with Plaid Sandbox")
 
@@ -1307,8 +1306,7 @@ def seed_catalog(x_internal_secret: str | None = Header(default=None)):
 
 @app.post("/api/v1/scheduler/run")
 def scheduled_run(x_internal_secret: str | None = Header(default=None)):
-    if x_internal_secret != settings.internal_run_secret:
-        raise HTTPException(401, "Unauthorized")
+    _require_internal(x_internal_secret)
     if settings.use_plaid and store.get_subcollection(UID, "plaid_items"):
         synced = plaid_sync(SyncIn(userId=UID))
         return {"runId": synced["runId"], "generatedAt": synced["snapshot"]["generatedAt"],
