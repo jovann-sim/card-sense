@@ -1,4 +1,5 @@
 import pytest
+from datetime import date
 
 from app.agents.advisory import AdvisoryAgent
 from app.merchants import DOMAIN_MCC, domain_key, hostname, resolve
@@ -21,8 +22,11 @@ RULES = {
 }
 
 
-def advise(url, merchant=None, wallet=None, rules=None):
-    return AdvisoryAgent(None).verdict(resolve(url, merchant), wallet or WALLET, rules or RULES)
+def advise(url, merchant=None, wallet=None, rules=None, transactions=None):
+    return AdvisoryAgent(None).verdict(
+        resolve(url, merchant), wallet or WALLET, rules or RULES,
+        transactions=transactions or [],
+    )
 
 
 # -- reading a location -----------------------------------------------------
@@ -72,7 +76,30 @@ def test_the_best_card_for_the_merchant_wins():
 
 def test_a_cap_is_stated_because_the_rate_stops_at_it():
     verdict = advise("https://www.instacart.com")
-    assert "6,000" in verdict["caveat"]
+    assert verdict["cap"]["limit"] == 6000
+    assert verdict["cap"]["status"] == "unverified"
+
+
+def test_remaining_cap_is_calculated_from_linked_transactions():
+    wallet = [{**WALLET[0], "accountId": "account-blue"}]
+    transactions = [{
+        "id": "grocery", "accountId": "account-blue", "amount": 1250,
+        "date": date.today().isoformat(), "category": "Groceries", "mcc": "5411",
+        "isPurchase": True,
+    }]
+    verdict = AdvisoryAgent(None).verdict(
+        resolve("https://www.instacart.com"), wallet, RULES,
+        transactions=transactions,
+    )
+    assert verdict["cap"] == {
+        "status": "verified", "limit": 6000.0, "used": 1250.0,
+        "remaining": 4750.0, "cycleLabel": "per year",
+    }
+
+
+def test_verdict_exposes_combined_recommendation_confidence():
+    verdict = advise("https://belmont-hotel.example", merchant="Belmont Hotel")
+    assert verdict["recommendationConfidence"] == "low"
 
 
 def test_the_runner_up_is_offered_so_the_choice_is_visible():

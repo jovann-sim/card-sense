@@ -1253,7 +1253,10 @@ def advise_merchant(body: MerchantIn):
         card["cardId"]: (store.get_global_doc("card_rules", card["cardId"]) or {}).get("rules", [])
         for card in wallet
     }
-    result = orch.advisory.verdict(merchant, wallet, rules)
+    result = orch.advisory.verdict(
+        merchant, wallet, rules,
+        transactions=store.get_subcollection(UID, "transactions"),
+    )
     logger.info("advise_merchant host=%s mcc=%s card=%s",
                 merchant.get("host"), merchant.get("mcc"),
                 (result.get("card") or {}).get("name"))

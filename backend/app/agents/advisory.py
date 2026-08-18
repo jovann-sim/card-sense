@@ -122,7 +122,7 @@ class AdvisoryAgent:
         return [*self.welcome_actions(welcome or [], wallet), *planned, *self.setup_actions(strategy, wallet),
                 *recommendations, *self.routing_actions(strategy, wallet)]
 
-    def verdict(self, merchant, wallet, rules, strategy=None):
+    def verdict(self, merchant, wallet, rules, strategy=None, transactions=None):
         """Which card to reach for at one merchant, right now.
 
         The point query behind the browser extension. It answers from the same
@@ -177,16 +177,20 @@ class AdvisoryAgent:
         # implies a difference the arithmetic does not support.
         tied = runner and abs(runner[0] - rate) < 0.0001
 
-        caveat = None
-        cap = rule.get("capSpend", rule.get("cap"))
-        if cap is not None:
-            caveat = (
-                f"This rate is capped at ${float(cap):,.0f} {rule.get('cycleLabel', 'per cycle')}. "
-                "Past that it pays the base rate."
-            )
+        from ..agents.forecast import ForecastAgent
+
+        cap = ForecastAgent().cap_headroom(card, rule, transactions or [])
+        caveat = cap.get("reason")
         conditions = unmet_rule_conditions(rule)
         if conditions:
             caveat = conditions[0]
+
+        terms_confidence = float(card.get("parseConfidence", card.get("confidence", 1.0)))
+        recommendation_confidence = (
+            "low" if merchant["confidence"] == "low" or terms_confidence < 0.5
+            else "high" if merchant["confidence"] == "high" and terms_confidence >= 0.8
+            else "medium"
+        )
 
         return {
             "merchant": merchant.get("host"),
@@ -194,9 +198,14 @@ class AdvisoryAgent:
             "category": merchant["category"],
             "mcc": merchant["mcc"],
             "confidence": merchant["confidence"],
-            "card": {"name": card["name"], "last4": card.get("last4", "0000")},
+            "recommendationConfidence": recommendation_confidence,
+            "card": {
+                "name": card["name"], "last4": card.get("last4", "0000"),
+                "termsConfidence": round(terms_confidence, 2),
+            },
             "rate": rule.get("rate", "—"),
             "valuePerDollar": round(rate, 4),
+            "cap": cap,
             "reason": (
                 f"Pays about ${rate:,.3f} per dollar here"
                 + (

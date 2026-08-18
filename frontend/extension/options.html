@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CardSense settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <p class="mark">Card<span>Sense</span></p>
+      <h1>Backend settings</h1>
+      <p class="intro">Choose the CardSense API this extension asks for recommendations. Permission is requested only for this origin.</p>
+      <form id="form">
+        <label for="apiOrigin">Backend origin</label>
+        <input id="apiOrigin" name="apiOrigin" type="url" placeholder="http://localhost:8080" required />
+        <p class="hint">Include http:// or https://. Paths are removed.</p>
+        <button type="submit">Save backend</button>
+        <p class="status" id="status" role="status"></p>
+      </form>
+    </main>
+    <script src="core.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

@@ -18,6 +18,10 @@
         <p class="verdict__card" id="card">—</p>
         <p class="verdict__digits num" id="digits">—</p>
         <p class="verdict__rate" id="rate"></p>
+        <div class="facts" id="facts" hidden>
+          <p class="fact"><span>Recommendation</span><strong id="confidence"></strong></p>
+          <p class="fact"><span>Reward limit</span><strong id="cap"></strong></p>
+        </div>
       </section>
 
       <p class="reason" id="reason"></p>
@@ -40,9 +44,11 @@
           Enter the card yourself. CardSense never fills or stores a card number.
         </p>
         <p class="fine">Informational only, not licensed financial advice.</p>
+        <button class="settings" id="settings" type="button">Backend settings</button>
       </footer>
     </div>
 
+    <script src="core.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

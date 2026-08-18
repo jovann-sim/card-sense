@@ -14,32 +14,40 @@ const CHECKOUT_HINTS = [
   "billing",
 ];
 
-function looksLikeCheckout() {
-  const url = location.href.toLowerCase();
+function looksLikeCheckout(urlValue = location.href, titleValue = document.title) {
+  const url = urlValue.toLowerCase();
   if (CHECKOUT_HINTS.some((hint) => url.includes(hint))) return true;
 
-  const text = document.title.toLowerCase();
+  const text = titleValue.toLowerCase();
   return CHECKOUT_HINTS.some((hint) => text.includes(hint));
 }
 
-function merchantName() {
-  const og = document.querySelector('meta[property="og:site_name"]');
+function merchantName(doc = document, hostname = location.hostname) {
+  const og = doc.querySelector('meta[property="og:site_name"]');
   if (og?.content) return og.content.trim();
 
-  const appName = document.querySelector('meta[name="application-name"]');
+  const appName = doc.querySelector('meta[name="application-name"]');
   if (appName?.content) return appName.content.trim();
 
-  return location.hostname.replace(/^www\./, "");
+  return hostname.replace(/^www\./, "");
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+function detectPage(loc = location, doc = document) {
+  return {
+    isCheckout: looksLikeCheckout(loc.href, doc.title),
+    merchant: merchantName(doc, loc.hostname),
+    url: loc.origin + loc.pathname,
+  };
+}
+
+if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "cardsense:detect") return;
 
-  sendResponse({
-    isCheckout: looksLikeCheckout(),
-    merchant: merchantName(),
-    url: location.origin + location.pathname,
-  });
+  sendResponse(detectPage());
 
   return true;
 });
+
+if (typeof module === "object" && module.exports) {
+  module.exports = { looksLikeCheckout, merchantName, detectPage };
+}

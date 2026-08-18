@@ -2,8 +2,6 @@
    compressed to 360px. Brass is opportunity, verdigris is reward banked,
    ember is the one thing you should not ignore. */
 
-@import url("https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62.5..125,400..700&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;600&display=swap");
-
 :root {
   --porcelain: #eff0ec;
   --paper: #fafbf8;
@@ -20,9 +18,10 @@
   --ember: #9c3a2a;
   --ember-wash: #f4e3df;
 
-  --display: "Archivo", system-ui, sans-serif;
-  --body: "Public Sans", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  /* Local-only stacks keep the popup deterministic and make no font request. */
+  --display: "Arial Narrow", "Avenir Next Condensed", system-ui, sans-serif;
+  --body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 * {
@@ -129,6 +128,49 @@ body {
   border: 1px solid var(--brass-tint);
   border-radius: 2px;
   padding: 3px 7px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.facts[hidden] {
+  display: none;
+}
+
+.fact {
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.fact span,
+.fact strong {
+  display: block;
+}
+
+.fact span {
+  color: var(--slate-soft);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fact strong {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+#confidence[data-level="high"] {
+  color: var(--verdigris);
+}
+
+#confidence[data-level="low"] {
+  color: var(--ember);
 }
 
 .reason {
@@ -256,6 +298,19 @@ body {
   font-size: 11px;
   color: var(--slate-soft);
   margin-top: 8px;
+}
+
+.settings {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  padding: 0;
+  margin-top: 8px;
+  background: transparent;
+  color: var(--slate);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
 }
 
 @media (prefers-reduced-motion: reduce) {

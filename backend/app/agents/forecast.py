@@ -422,6 +422,43 @@ class ForecastAgent:
             })
         return cards
 
+    def cap_headroom(self, card, rule, transactions, *, today: date | None = None) -> dict:
+        """Return checkout-safe cap usage for one card rule.
+
+        A missing account mapping or unsupported cycle must be reported as
+        unknown. Treating either as zero spend would make the extension claim
+        headroom it cannot prove exists.
+        """
+        cap = rule.get("capSpend", rule.get("cap"))
+        if cap is None:
+            return {"status": "uncapped", "limit": None, "used": None, "remaining": None}
+
+        limit = float(cap)
+        as_of = today or date.today()
+        cycle = self._cycle_bounds(rule.get("cycleLabel"), as_of)
+        if not card.get("accountId"):
+            return {
+                "status": "unverified", "limit": limit, "used": None, "remaining": None,
+                "cycleLabel": rule.get("cycleLabel", "per cycle"),
+                "reason": "This card is not linked to a transaction account, so cap usage is unknown.",
+            }
+        if cycle is None:
+            return {
+                "status": "unverified", "limit": limit, "used": None, "remaining": None,
+                "cycleLabel": rule.get("cycleLabel", "per cycle"),
+                "reason": "This cap's cycle boundary is unavailable, so remaining headroom is unknown.",
+            }
+
+        used = self._used_spend(card, rule, transactions, cycle[0], as_of)
+        remaining = max(0.0, limit - used)
+        return {
+            "status": "reached" if remaining <= 0 else "verified",
+            "limit": round(limit, 2),
+            "used": round(used, 2),
+            "remaining": round(remaining, 2),
+            "cycleLabel": rule.get("cycleLabel", "per cycle"),
+        }
+
     def _cap_collision(self, item, when, transactions, wallet, rules, allocated):
         categories = item.get("categories") or []
         category = categories[0] if categories else ""

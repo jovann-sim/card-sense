@@ -10,7 +10,7 @@
  * far less than it is technically permitted to.
  */
 
-const API = "http://localhost:8080";
+const Core = globalThis.CardSenseExtension;
 
 const AGENT_LABEL = {
   ingestion: "Ingestion agent",
@@ -33,11 +33,16 @@ async function detect() {
   }
 }
 
-async function getVerdict() {
+async function configuredApiOrigin() {
+  const stored = await chrome.storage.sync.get({ apiOrigin: Core.DEFAULT_API_ORIGIN });
+  return Core.normalizeApiOrigin(stored.apiOrigin);
+}
+
+async function getVerdict(apiOrigin) {
   const page = await detect();
   if (!page?.url) return null;
 
-  const response = await fetch(`${API}/api/v1/advise/merchant`, {
+  const response = await fetch(`${apiOrigin}/api/v1/advise/merchant`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: page.url, merchant: page.merchant }),
@@ -60,6 +65,11 @@ function render(v) {
   el("digits").textContent = `••${v.card.last4}`;
   el("rate").textContent = v.rate ?? "";
   el("reason").textContent = v.reason;
+  const state = Core.popupState(v);
+  el("confidence").textContent = state.confidence;
+  el("confidence").dataset.level = v.recommendationConfidence ?? v.confidence ?? "low";
+  el("cap").textContent = state.cap;
+  el("facts").hidden = false;
 
   // A low-confidence merchant match is stated, because the card it produces is
   // only as good as the category behind it.
@@ -98,11 +108,17 @@ function renderEmpty(headline, message) {
   el("digits").textContent = "";
   el("rate").textContent = "";
   el("reason").textContent = message;
+  el("facts").hidden = true;
+  el("caveat").hidden = true;
+  el("runnerWrap").hidden = true;
   el("why").replaceChildren();
 }
 
-getVerdict()
-  .then((v) => {
+el("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+configuredApiOrigin()
+  .then(async (apiOrigin) => ({ apiOrigin, verdict: await getVerdict(apiOrigin) }))
+  .then(({ verdict: v }) => {
     if (!v) return renderEmpty("No page to read", "Open a shop and try again.");
     if (!v.card) {
       // Declining is the right answer twice over: when we cannot name the
@@ -111,9 +127,9 @@ getVerdict()
     }
     render(v);
   })
-  .catch(() =>
-    renderEmpty(
-      "Could not reach CardSense",
-      "The backend is not running on localhost:8080, so there is nothing to recommend from.",
-    ),
-  );
+  .catch(async () => {
+    let apiOrigin = Core.DEFAULT_API_ORIGIN;
+    try { apiOrigin = await configuredApiOrigin(); } catch { /* options page explains invalid values */ }
+    const state = Core.backendFailure(apiOrigin);
+    renderEmpty(state.headline, state.message);
+  });
