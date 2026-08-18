@@ -68,6 +68,9 @@ Then deploy. This builds the Dockerfile in `backend/` and runs it:
 gcloud run deploy cardsense-api --source . --region us-central1 --allow-unauthenticated --service-account cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com --set-secrets PLAID_SECRET=plaid-secret:latest,INTERNAL_RUN_SECRET=cardsense-internal:latest --set-env-vars DEMO_MODE=false,GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e,GOOGLE_CLOUD_LOCATION=global,FIRESTORE_DATABASE=all-things-agentic,FINANCE_AGENT_MODEL=gemini-2.5-flash,PLAID_CLIENT_ID=6a79aafc2df7e2000d7d2d7c,PLAID_ENV=sandbox --memory 1Gi --timeout 300 --min-instances 1
 ```
 
+The pipeline now runs on the ADK graph by default, which is where the Gemini
+calls live. That makes the timeout below load-bearing rather than precautionary.
+
 Two of those flags matter more than they look:
 
 - `--timeout 300` — card intelligence takes about thirty seconds per document,

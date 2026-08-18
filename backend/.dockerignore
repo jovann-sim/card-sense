@@ -3,7 +3,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 tests/
-evals/
+# evals/ is NOT excluded: quality.py imports evals.golden_cases to run
+# the agent-quality gate, and the Dockerfile copies it. Excluding it here
+# makes `COPY evals ./evals` fail and the image build fail with it.
 .env
 .env.*
 *.md
