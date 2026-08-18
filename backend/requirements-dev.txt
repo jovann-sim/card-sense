@@ -1,0 +1,8 @@
+-r requirements.txt
+
+# Test-only. Kept separate from requirements.txt so the Cloud Run image never
+# installs a test runner it will never use — this is exactly the mistake that
+# broke CI: pytest was present locally (installed once, by hand) and never
+# written down anywhere, so the first clean environment to run it had no idea
+# it was needed.
+pytest==9.1.1
