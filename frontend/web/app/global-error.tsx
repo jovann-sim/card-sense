@@ -27,7 +27,15 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const unreachable = /snapshot|fetch|ECONNREFUSED|aborted|timeout/i.test(error.message);
+  // Next.js redacts error messages in production and only exposes a digest,
+  // which means sniffing the message never matches — the "generic error"
+  // branch always won even for the failure this file exists to explain. So the
+  // default is now the backend one, since a fresh deploy that lands here
+  // almost always got here for exactly that reason. The generic branch
+  // remains for local development, where the real message is available.
+  const unreachable =
+    process.env.NODE_ENV === "production" ||
+    /snapshot|fetch|ECONNREFUSED|aborted|timeout/i.test(error.message);
 
   return (
     <html lang="en" className={`${archivo.variable} ${publicSans.variable} ${plexMono.variable}`}>
