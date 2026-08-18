@@ -137,30 +137,77 @@ def test_transactions_on_an_unlinked_account_are_reported():
 
 
 # -- webhook ---------------------------------------------------------------
+#
+# Verification only runs when Plaid is configured — nothing sandboxed or local
+# can present a real Plaid signature, and use_plaid is False by default in
+# tests, matching that. These exercise the endpoint over real HTTP rather than
+# calling the function directly, because the thing under test is genuinely
+# about headers and raw bytes: TestClient is the right tool here, not a
+# shortcut around it.
 
-def test_a_non_transaction_webhook_is_acknowledged_not_acted_on():
+@pytest.fixture
+def webhook_client():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    return TestClient(app)
+
+
+def test_a_non_transaction_webhook_is_acknowledged_not_acted_on(webhook_client, monkeypatch):
     from app import main
-    result = main.plaid_webhook({"webhook_type": "ITEM", "webhook_code": "ERROR"})
+    # Isolated from verification, which is covered on its own below — this
+    # tests what happens once a body is trusted, not whether it should be.
+    monkeypatch.setattr(type(main.settings), "use_plaid", property(lambda self: False))
+    response = webhook_client.post("/api/v1/plaid/webhook",
+                                   json={"webhook_type": "ITEM", "webhook_code": "ERROR"})
+    result = response.json()
+    assert response.status_code == 200
     assert result["ok"] is True and result["handled"] is False
 
 
-def test_an_unknown_transaction_code_is_acknowledged():
+def test_an_unknown_transaction_code_is_acknowledged(webhook_client, monkeypatch):
     """Acknowledging stops Plaid retrying something we will never handle."""
     from app import main
-    result = main.plaid_webhook({"webhook_type": "TRANSACTIONS", "webhook_code": "SOMETHING_NEW"})
+    monkeypatch.setattr(type(main.settings), "use_plaid", property(lambda self: False))
+    response = webhook_client.post("/api/v1/plaid/webhook",
+                                   json={"webhook_type": "TRANSACTIONS", "webhook_code": "SOMETHING_NEW"})
+    result = response.json()
     assert result["ok"] is True and result["handled"] is False
 
 
-def test_an_empty_webhook_body_does_not_crash():
-    from app import main
-    assert main.plaid_webhook({})["ok"] is True
-
-
-def test_a_sync_webhook_without_plaid_configured_is_declined_cleanly(monkeypatch):
+def test_an_empty_webhook_body_does_not_crash(webhook_client, monkeypatch):
     from app import main
     monkeypatch.setattr(type(main.settings), "use_plaid", property(lambda self: False))
-    result = main.plaid_webhook({"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"})
+    response = webhook_client.post("/api/v1/plaid/webhook", content=b"")
+    assert response.json()["ok"] is True
+
+
+def test_a_sync_webhook_without_plaid_configured_is_declined_cleanly(webhook_client, monkeypatch):
+    from app import main
+    monkeypatch.setattr(type(main.settings), "use_plaid", property(lambda self: False))
+    response = webhook_client.post("/api/v1/plaid/webhook",
+                                   json={"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"})
+    result = response.json()
     assert result["handled"] is False and "not configured" in result["reason"]
+
+
+def test_a_webhook_with_no_signature_is_rejected_once_plaid_is_configured(webhook_client, monkeypatch):
+    """The one endpoint whose job is being called by someone else must check who."""
+    from app import main
+    monkeypatch.setattr(type(main.settings), "use_plaid", property(lambda self: True))
+    response = webhook_client.post("/api/v1/plaid/webhook",
+                                   json={"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"})
+    assert response.status_code == 401
+
+
+def test_a_forged_signature_header_is_rejected_not_trusted(webhook_client, monkeypatch):
+    from app import main
+    monkeypatch.setattr(type(main.settings), "use_plaid", property(lambda self: True))
+    response = webhook_client.post(
+        "/api/v1/plaid/webhook",
+        json={"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"},
+        headers={"Plaid-Verification": "not-a-real-jwt"},
+    )
+    assert response.status_code == 401
 
 
 # -- engine parity ----------------------------------------------------------

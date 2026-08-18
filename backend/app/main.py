@@ -9,7 +9,7 @@ import uuid
 import logging
 from time import perf_counter
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, Query, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Header, Query, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -34,6 +34,7 @@ from .models import (
     CardResponse,
 )
 from .orchestrator import AGENTS, Orchestrator, READ_MODEL_VERSION, project_catalog
+from . import plaid_webhook_verify
 from .plaid_client import get_plaid_client
 from .quality import build_quality_report
 
@@ -950,7 +951,7 @@ def plaid_exchange(body: ExchangeTokenIn):
 
 
 @app.post("/api/v1/plaid/webhook")
-def plaid_webhook(body: dict):
+async def plaid_webhook(request: Request, plaid_verification: str | None = Header(default=None)):
     """Plaid tells us a transaction landed; we pull it immediately.
 
     This is what makes the feed current rather than a thing the user refreshes.
@@ -963,9 +964,33 @@ def plaid_webhook(body: dict):
     of it. Detecting the moment of purchase is the extension's job: it sees the
     checkout page before the transaction exists anywhere.
 
-    Deliberately tolerant: a webhook that errors gets retried by Plaid, so an
-    unrecognised type is acknowledged rather than failed.
+    Deliberately tolerant of an unrecognised webhook type, once verified — a
+    webhook that errors gets retried by Plaid, so acknowledging what we do not
+    handle is correct. What is not tolerated is skipping verification: this is
+    the one endpoint whose entire job is to be called by someone other than the
+    user, and the only defense against a forged one is checking Plaid's own
+    signature on the exact bytes received.
     """
+    raw_body = await request.body()
+
+    if settings.use_plaid:
+        try:
+            verified = plaid_webhook_verify.verify(raw_body, plaid_verification)
+        except plaid_webhook_verify.WebhookVerificationError as exc:
+            logger.warning("Rejected an unverifiable Plaid webhook: %s", exc)
+            raise HTTPException(401, "Webhook verification failed") from exc
+        body = verified.body
+    else:
+        # Nothing sandboxed will ever call this without Plaid configured, and
+        # nothing genuine can call it either — there is no signing key to
+        # verify against. Parsed only to keep the acknowledged-type logic
+        # below working the same way local development always has.
+        import json as _json
+        try:
+            body = _json.loads(raw_body or b"{}")
+        except ValueError:
+            body = {}
+
     webhook_type = (body or {}).get("webhook_type")
     webhook_code = (body or {}).get("webhook_code")
     item_id = (body or {}).get("item_id")

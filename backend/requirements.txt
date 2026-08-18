@@ -7,6 +7,7 @@ certifi==2025.10.5
 google-cloud-firestore==2.21.0
 google-genai==2.17.0
 plaid-python==38.0.0
+PyJWT[crypto]==2.10.1
 python-multipart==0.0.20
 httpx==0.28.1
 google-adk==2.6.3
