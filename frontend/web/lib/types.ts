@@ -129,6 +129,8 @@ export interface TrackValuation {
   rate: number;
   nominal: number;
   source: string;
+  /** True when the rate is a stated assumption rather than a sourced figure. */
+  isPlaceholder?: boolean;
 }
 
 /* -------------------------------------------------------------- forecast --- */

@@ -11,6 +11,7 @@ from .agents.forecast import ForecastAgent
 from .agents.ingestion import IngestionAgent, is_eligible_purchase
 from .agents.runtime import GeminiRuntime
 from .agents.strategy import StrategyAgent, VALUATIONS
+from .valuations import DEFAULT_UNIT_VALUES
 from .models import Snapshot
 from .simulation import plan as build_plan
 from .welcome import qualify_catalog, rescue, track_held
@@ -444,7 +445,7 @@ class Orchestrator:
             strategy.get("routable", []), welcome_held,
             service_id=strategy.get("routingService"),
         )
-        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [{"track": name, "rawUnits": round(captured / value, 2) if value else 0, "unitLabel": "dollars" if name == "cashback" else name, "rate": value, "nominal": captured, "source": f"{name.title()} nominal value assumption."} for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "routable": strategy.get("routable", []), "welcome": welcome_held, "welcomeCandidates": welcome_candidates, "plan": simulation, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [self._track_valuation(name, value, captured) for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "routable": strategy.get("routable", []), "welcome": welcome_held, "welcomeCandidates": welcome_candidates, "plan": simulation, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
     @staticmethod
@@ -573,6 +574,29 @@ class Orchestrator:
             candidates.append(qualify_catalog(item, bonus, monthly))
         candidates.sort(key=lambda row: (not row["qualifies"], -row["valueUsd"]))
         return held, candidates
+
+    def _track_valuation(self, name: str, value: float, captured: float) -> dict:
+        """One reward track's nominal value, with the honest note behind it.
+
+        The rate for every track came with its own reasoning already attached
+        in valuations.py — including, for miles and points, an explicit
+        "Placeholder... Confirm" — and none of it used to leave this function:
+        every track was given the same generic "X nominal value assumption"
+        string regardless of whether the underlying number was sourced or
+        guessed. isPlaceholder lets the interface flag the guessed ones
+        distinctly rather than relying on a reader to notice the word inside
+        a sentence of prose.
+        """
+        note = DEFAULT_UNIT_VALUES.get(name, (value, f"{name.title()} nominal value assumption."))[1]
+        return {
+            "track": name,
+            "rawUnits": round(captured / value, 2) if value else 0,
+            "unitLabel": "dollars" if name == "cashback" else name,
+            "rate": value,
+            "nominal": captured,
+            "source": note,
+            "isPlaceholder": "placeholder" in note.lower(),
+        }
 
     def _period(self, transactions) -> dict:
         """The window the figures on this page actually cover.

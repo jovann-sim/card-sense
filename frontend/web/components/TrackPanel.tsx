@@ -38,7 +38,12 @@ export function TrackPanel({
                 ? "No conversion applied"
                 : `${count(t.rawUnits)} ${t.unitLabel} × $${t.rate.toFixed(4)}`}
             </p>
-            <p className="track__source">{t.source}</p>
+            <p className="track__source">
+              {t.isPlaceholder && (
+                <span className="track__placeholder">Unconfirmed rate</span>
+              )}
+              {t.source}
+            </p>
           </article>
         ))}
       </div>

@@ -310,6 +310,7 @@ export const snapshot: Snapshot = {
       rate: 0.01,
       nominal: 241.8,
       source: "Placeholder rate — confirm against issuer transfer charts before the demo.",
+      isPlaceholder: true,
     },
     {
       track: "cashback",
@@ -326,6 +327,7 @@ export const snapshot: Snapshot = {
       rate: 0.013,
       nominal: 245.7,
       source: "Placeholder rate — confirm against issuer transfer charts before the demo.",
+      isPlaceholder: true,
     },
   ],
 
