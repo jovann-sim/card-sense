@@ -1,0 +1,39 @@
+name: Backend tests
+
+# Runs on every push and PR touching the backend, so a broken test is caught
+# before it reaches main rather than found by whoever pulls next. Nothing
+# here needs credentials: the suite runs entirely against the in-memory store
+# under DEMO_MODE's default, which is exactly what makes it safe to run
+# unattended on a fork or a PR from outside the team.
+on:
+  push:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to match the version the app actually requires — 3.9 cannot
+      # run it (a `str | None` pydantic model raises TypeError there).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: PYTHONPATH=. python -m pytest tests/ -q
