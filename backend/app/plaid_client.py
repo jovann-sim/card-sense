@@ -18,14 +18,21 @@ def get_plaid_client() -> plaid_api.PlaidApi:
     else:
         raise ValueError("PLAID_ENV must be 'sandbox' or 'production'")
 
-    if not settings.plaid_client_id or not settings.plaid_secret:
+    # Secret Manager values are raw bytes. A secret created with `echo` carries
+    # its trailing newline into the environment, and plaid-python then rejects
+    # it before making a request because HTTP header values cannot contain
+    # newlines. Plaid client IDs and secrets contain no meaningful surrounding
+    # whitespace, so normalise both at the boundary where they become headers.
+    client_id = (settings.plaid_client_id or "").strip()
+    secret = (settings.plaid_secret or "").strip()
+    if not client_id or not secret:
         raise ValueError("PLAID_CLIENT_ID and PLAID_SECRET are required when DEMO_MODE=false")
 
     configuration = Configuration(
         host=host,
         api_key={
-            "clientId": settings.plaid_client_id,
-            "secret": settings.plaid_secret,
+            "clientId": client_id,
+            "secret": secret,
         },
         # Use a maintained CA bundle instead of relying on the host Python
         # installation's certificate store.
