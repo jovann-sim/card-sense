@@ -8,6 +8,7 @@ Backend for the CardSense frontend and five-agent architecture.
 - Google Gemini for Card Intelligence + Advisory
 - Deterministic Ingestion, Forecast, and Strategy logic
 - Optional Plaid sandbox ingestion
+- Plaid webhook signature, freshness, and body-integrity verification
 - Cloud Run / Cloud Scheduler friendly
 
 The API validates and returns the frontend's `Snapshot` contract. The live
@@ -105,6 +106,7 @@ The architecture intentionally keeps Plaid access tokens server-side and never e
 
 - `GET /health`
 - `GET /api/v1/snapshot`
+- `GET /api/v1/forecast`
 - `POST /api/v1/runs`
 - `POST /api/v1/runs/async`
 - `GET /api/v1/runs/{run_id}`
@@ -117,10 +119,12 @@ The architecture intentionally keeps Plaid access tokens server-side and never e
 - `POST /api/v1/advice/{advice_id}/resolve`
 - `POST /api/v1/cards`
 - `GET /api/v1/cards`
+- `PATCH /api/v1/cards/{card_id}`
 - `DELETE /api/v1/cards/{card_id}`
 - `POST /api/v1/cards/{card_id}/recheck`
 - `POST /api/v1/cards/{card_id}/terms`
 - `POST /api/v1/cards/{card_id}/link-account`
+- `DELETE /api/v1/cards/{card_id}/link-account`
 - `POST /api/v1/plaid/link-token`
 - `POST /api/v1/plaid/exchange-token`
 - `POST /api/v1/plaid/sync`
@@ -131,12 +135,15 @@ The architecture intentionally keeps Plaid access tokens server-side and never e
 - `POST /api/v1/plaid/sandbox/seed`
 - `POST /api/v1/import/csv`
 - `POST /api/v1/demo/reset`
+- `POST /api/v1/demo/seed-realistic`
+- `POST /api/v1/advise/merchant`
+- `POST /api/v1/catalog/seed`
 - `POST /api/v1/scheduler/run`
 
-The scheduler and reset endpoints require `X-Internal-Secret`; replace the
-default secret and use service-to-service identity before deployment.
-Forcing a new golden evaluation also requires `X-Internal-Secret`; reading the
-latest quality report does not.
+The reset, seed, CSV import, scheduler, and forced quality-evaluation endpoints
+require `X-Internal-Secret`; replace the default secret and use
+service-to-service identity before deployment. Reading the latest quality
+report does not require the secret.
 
 ## Agent coordination
 
@@ -240,11 +247,16 @@ analysis run per sync request.
 ### Current security boundary
 
 The API is deliberately single-user and uses the fixed `demo-user`. There is no
-application authentication or multi-user authorization. The webhook handler
-also does not yet verify Plaid's webhook signature, and background runs use
-in-process FastAPI tasks rather than a durable queue. This is acceptable only
-for local development and Plaid Sandbox; do not expose it as a shared or
-production financial service.
+application authentication or multi-user authorization. When Plaid credentials
+are configured, the webhook handler verifies the `Plaid-Verification` JWT
+against Plaid's published ES256 key, rejects tokens older than five minutes,
+and compares the signed SHA-256 claim with the exact request bytes. Local mode
+without Plaid credentials preserves the unsigned development path.
+
+Webhook verification does not make the rest of the API production-safe.
+Browser-facing mutations remain unauthenticated and unthrottled, and background
+runs use in-process FastAPI tasks rather than a durable queue. Use synthetic
+data and Plaid Sandbox only; do not expose this as a shared financial service.
 
 ### Disconnect and reset
 
@@ -290,3 +302,22 @@ PLAID_COUNTRY_CODES=US
 Keep Plaid credentials server-side. Do not put `PLAID_SECRET` or a Plaid `access_token` in the frontend.
 
 For the hackathon, start with Plaid Sandbox. The existing CSV endpoint remains available as a fallback/demo ingestion source.
+
+## Verification
+
+Install development dependencies separately so production images do not carry
+the test runner:
+
+```bash
+cd backend
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest tests -q
+python -m evals.run_agent_evals
+```
+
+The golden evaluation currently covers 15 cases and 70 assertions across all
+five agents. `tests/test_adk_parity.py` also runs the ADK and fallback engines
+from identical stores and compares their financial read models and persisted
+state. A pre-existing virtual environment must be refreshed after dependency
+changes; webhook verification requires `PyJWT[crypto]`.

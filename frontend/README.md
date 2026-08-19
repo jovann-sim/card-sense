@@ -89,7 +89,8 @@ unavailable; production fails visibly instead of showing fake data.
 and merchant name to `POST /api/v1/advise/merchant`, then renders the winning
 held card, runner-up, confidence caveat, and agent trace. Unknown merchants,
 unreadable rules, and an unavailable backend produce explicit empty states
-instead of a guessed recommendation.
+instead of a guessed recommendation. The content script is wired into the
+popup and marks checkout-like pages using only the URL and document title.
 
 ## Decisions worth knowing before you edit
 
@@ -134,14 +135,33 @@ a fallback for onboarding paths that do not have a completed sync run.
 The `Connect accounts` pill is a real trigger, although its fixed position is
 still hackathon-oriented UI.
 
+Root-layout failures are handled by `web/app/global-error.tsx`. In production,
+where Next.js redacts the original message, it defaults to backend connection
+guidance because a missing or unreachable `CARDSENSE_API_URL` is the expected
+deployment failure. Development retains the detailed error distinction.
+
+## Verification
+
+```bash
+cd frontend/web
+npm run lint
+npx tsc --noEmit
+npm run build
+
+cd ../extension
+npm test
+```
+
+As of 2026-08-19, web lint, TypeScript checking, the Next.js production build,
+and all eight extension tests pass.
+
 ## Known follow-ups
 
 - Some point and mile conversion rates have explicit placeholder fallbacks in
-  the backend valuation table. Confirm them before presenting the output as
-  financial guidance.
-- The extension popup loads fonts from Google Fonts over the network. Bundle
-  the woff2 files into `extension/` so it renders offline.
-- `detect.js` is a conservative stub — it reports the merchant and whether the
-  page looks like a checkout, and nothing calls it yet.
+  the backend valuation table. The Tracks panel marks these as
+  `Unconfirmed rate`; source them before presenting the output as financial
+  guidance.
 - The `Retry this run` button on `/activity` is inert until there is an agent
   to retry.
+- The extension is an unpacked demo build. Production packaging should wait for
+  authentication because the backend is still fixed to `demo-user`.

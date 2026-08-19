@@ -8,6 +8,11 @@ Reads the hostname, resolves it to a merchant category code, and asks the
 backend which of your cards pays most for that code. The answer comes from the
 same rules and the same optimiser as the dashboard, so the two cannot disagree.
 
+The content script is connected to the popup through a narrow message. It uses
+the URL and document title to identify checkout-like pages, and prefers a
+site-published `og:site_name` or application name over the hostname when naming
+the merchant. The URL sent to the backend excludes its query and fragment.
+
 It declines twice over: when the merchant cannot be named, and when no card you
 hold has a readable rule covering it. A confident wrong card at checkout is
 worse than no popup at all.
@@ -56,6 +61,8 @@ cd frontend/extension && npm test
 
 They cover known and unknown merchants, unreadable reward rules, backend
 failure recovery, checkout detection, and the privacy-limited page payload.
+The current suite contains eight tests and passes without third-party test
+dependencies.
 
 ## Try these
 
@@ -71,3 +78,10 @@ failure recovery, checkout detection, and the privacy-limited page payload.
 `backend/app/merchants.py` holds the domain table. A known domain is treated as
 fact; a category word in a site's own name is treated as a hint and reported at
 low confidence. Anything else resolves to nothing on purpose.
+
+## Current boundary
+
+This is an unpacked hackathon extension, not a store-ready production build.
+Its backend is still single-user and unauthenticated, so use it only with the
+local or controlled synthetic-data demo. Package it for broader distribution
+only after backend authentication, user ownership, and rate limiting exist.

@@ -6,7 +6,7 @@
 cd backend && source .venv/bin/activate
 PYTHONPATH=. \
 GOOGLE_GENAI_USE_VERTEXAI=TRUE \
-GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e \
+GOOGLE_CLOUD_PROJECT=your-project \
 GOOGLE_CLOUD_LOCATION=global \
 adk run adk_agents/card_intelligence "your query"
 ```
@@ -85,15 +85,15 @@ so there is one copy of the logic and the two paths cannot drift.
 
 ```bash
 PYTHONPATH=. GOOGLE_GENAI_USE_VERTEXAI=TRUE \
-GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e \
+GOOGLE_CLOUD_PROJECT=your-project \
 GOOGLE_CLOUD_LOCATION=global \
 adk run adk_agents/pipeline "Run the CardSense analysis for demo-user."
 ```
 
-Verified end to end against live Firestore: ingestion reported coverage,
-card intelligence read a real terms document, strategy priced the wallet, and
-advisory declined to invent advice when the gap was $0.16 — "less than a dollar
-a month" — which is the restraint the instruction asks for.
+The live Firestore demo path has been exercised end to end: ingestion reports
+coverage, Card Intelligence reads terms, Strategy prices the wallet, Forecast
+projects it, and Advisory is allowed to abstain when the measured gain is too
+small to justify a recommendation.
 
 ## Running it from the API
 
@@ -112,13 +112,25 @@ the cent — spend, captured and unclaimed — which is what makes the switch sa
 it is not observable to a user.
 
 Each node's output is written to `agent_runs` as it happens, tagged
-`engine: "adk"`, so the activity page shows real stages with real timings. Those
-timings are worth looking at: the deterministic nodes finish in 2-43ms while
-card intelligence takes 30 seconds, which is the whole argument for keeping
-three of five agents out of a language model.
+`engine: "adk"`, so the activity page shows real stages and timings. The
+deterministic nodes are normally much faster than document extraction, which
+is one reason financial arithmetic remains outside the language model.
 
 ## Verification
 
 `tests/test_adk_parity.py` starts both engines from identical stores and checks
 the financial snapshot, card-rule refreshes, advice lifecycle, telemetry,
 async selection and failure persistence.
+
+```bash
+cd backend
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest tests/test_adk_parity.py -q
+python -m evals.run_agent_evals
+```
+
+The golden evaluation currently passes 15 cases and 70 assertions across the
+five production stages without calling Plaid or Gemini. Live model extraction
+remains a separate, credentialed and potentially billable release check via
+`python -m evals.run_extraction_eval`.

@@ -1,163 +1,367 @@
 # Deploying CardSense
 
-Frontend on Vercel, backend on Cloud Run, Firestore as the store. The frontend
-is a thin read model over the backend, so the backend goes first.
+CardSense currently deploys as:
 
-Everything below is run by you: each step needs your Google or Vercel login.
+- FastAPI on Google Cloud Run
+- Firestore as the non-demo store
+- Gemini through Vertex AI
+- Plaid Sandbox for bank data
+- Next.js on Vercel
+- An unpacked Chrome extension configured to call the Cloud Run origin
 
----
+This is a controlled, synthetic-data hackathon deployment. Cloud Run is public
+because neither the dashboard nor the extension has authentication. Do not use
+real financial data or treat this as a shared production service.
 
-## 1. Backend → Cloud Run
+The current Google Cloud resource names are:
 
-You already have the project and the Firestore database. From `backend/`:
+| Resource | Value |
+|---|---|
+| Project | `project-cc11421f-7c37-404f-a7e` |
+| Region | `us-central1` |
+| Cloud Run service | `cardsense-api` |
+| Runtime service account | `cardsense-api` |
+| Firestore database | `all-things-agentic` |
+| Plaid secret | `plaid-secret` |
+| Internal API secret | `cardsense-internal` |
 
-```bash
-gcloud config set project project-cc11421f-7c37-404f-a7e
-```
+The commands below assume macOS, Linux, or Cloud Shell and require authenticated
+Google Cloud and Vercel CLIs.
 
-Enable what the deploy needs (once):
+## 1. Select the Google Cloud project
 
-```bash
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com aiplatform.googleapis.com
-```
-
-Give the service its own identity, rather than the default one that can touch
-everything in the project:
-
-```bash
-gcloud iam service-accounts create cardsense-api --display-name="CardSense API"
-```
-
-Grant it exactly two things — Firestore, and Vertex AI for the two agents that
-use Gemini:
-
-```bash
-gcloud projects add-iam-policy-binding project-cc11421f-7c37-404f-a7e --member="serviceAccount:cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com" --role="roles/datastore.user"
-```
+From the repository root:
 
 ```bash
-gcloud projects add-iam-policy-binding project-cc11421f-7c37-404f-a7e --member="serviceAccount:cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com" --role="roles/aiplatform.user"
+export CS_PROJECT_ID="project-cc11421f-7c37-404f-a7e"
+export CS_REGION="us-central1"
+export CS_SERVICE="cardsense-api"
+export CS_DATABASE="all-things-agentic"
+export CS_RUNTIME_ACCOUNT="cardsense-api"
+
+gcloud auth login
+gcloud config set project "$CS_PROJECT_ID"
 ```
 
-Put the Plaid secret in Secret Manager rather than in a deploy command, where it
-would sit in your shell history and in the Cloud Run revision description:
+The named Firestore database must already exist. Local data is shared with this
+deployment only when the local backend also uses `DEMO_MODE=false`, the same
+project, and the same `FIRESTORE_DATABASE`. The default local
+`DEMO_MODE=true` store in `backend/.localstore.json` is separate.
+
+Enable the required APIs once:
 
 ```bash
-gcloud services enable secretmanager.googleapis.com && printf '%s' 'YOUR_PLAID_SECRET' | gcloud secrets create plaid-secret --data-file=-
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  firestore.googleapis.com \
+  aiplatform.googleapis.com \
+  secretmanager.googleapis.com
 ```
+
+## 2. Create the runtime identity
+
+Create the service account once. Skip the first command if it already exists:
 
 ```bash
-gcloud secrets add-iam-policy-binding plaid-secret --member="serviceAccount:cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
+gcloud iam service-accounts create "$CS_RUNTIME_ACCOUNT" \
+  --display-name="CardSense API"
 ```
 
-The administrative endpoints — wiping and reseeding the account — are gated on a
-shared secret, and the app refuses to start in real mode while that secret is
-still the placeholder. Generate one:
+Grant only the runtime roles used by the application:
 
 ```bash
-printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create cardsense-internal --data-file=-
+gcloud projects add-iam-policy-binding "$CS_PROJECT_ID" \
+  --member="serviceAccount:${CS_RUNTIME_ACCOUNT}@${CS_PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/datastore.user"
+
+gcloud projects add-iam-policy-binding "$CS_PROJECT_ID" \
+  --member="serviceAccount:${CS_RUNTIME_ACCOUNT}@${CS_PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
 ```
+
+## 3. Create or rotate secrets
+
+Do not put a Plaid secret directly in a command that will be saved in shell
+history. For the first secret version:
 
 ```bash
-gcloud secrets add-iam-policy-binding cardsense-internal --member="serviceAccount:cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
+printf 'Plaid secret: '
+read -s CS_PLAID_SECRET
+printf '\n'
+printf '%s' "$CS_PLAID_SECRET" |
+  gcloud secrets create plaid-secret \
+    --replication-policy=automatic \
+    --data-file=-
+unset CS_PLAID_SECRET
+
+CS_INTERNAL_SECRET="$(openssl rand -hex 32)"
+printf '%s' "$CS_INTERNAL_SECRET" |
+  gcloud secrets create cardsense-internal \
+    --replication-policy=automatic \
+    --data-file=-
+unset CS_INTERNAL_SECRET
 ```
 
-Then deploy. This builds the Dockerfile in `backend/` and runs it:
+If either secret already exists, add a version instead of trying to create it:
 
 ```bash
-gcloud run deploy cardsense-api --source . --region us-central1 --allow-unauthenticated --service-account cardsense-api@project-cc11421f-7c37-404f-a7e.iam.gserviceaccount.com --set-secrets PLAID_SECRET=plaid-secret:latest,INTERNAL_RUN_SECRET=cardsense-internal:latest --set-env-vars DEMO_MODE=false,GOOGLE_CLOUD_PROJECT=project-cc11421f-7c37-404f-a7e,GOOGLE_CLOUD_LOCATION=global,FIRESTORE_DATABASE=all-things-agentic,FINANCE_AGENT_MODEL=gemini-2.5-flash,PLAID_CLIENT_ID=6a79aafc2df7e2000d7d2d7c,PLAID_ENV=sandbox --memory 1Gi --timeout 300 --min-instances 1
+printf 'New Plaid secret: '
+read -s CS_PLAID_SECRET
+printf '\n'
+printf '%s' "$CS_PLAID_SECRET" |
+  gcloud secrets versions add plaid-secret --data-file=-
+unset CS_PLAID_SECRET
+
+CS_INTERNAL_SECRET="$(openssl rand -hex 32)"
+printf '%s' "$CS_INTERNAL_SECRET" |
+  gcloud secrets versions add cardsense-internal --data-file=-
+unset CS_INTERNAL_SECRET
 ```
 
-The pipeline now runs on the ADK graph by default, which is where the Gemini
-calls live. That makes the timeout below load-bearing rather than precautionary.
-
-Two of those flags matter more than they look:
-
-- `--timeout 300` — card intelligence takes about thirty seconds per document,
-  and the default request timeout will cut it off.
-- `--min-instances 1` — a cold start plus a Gemini call is a long first
-  impression. This costs a few dollars a month and is worth it while judging.
-
-Check it:
+Allow the runtime service account to read both secrets:
 
 ```bash
-curl -s "$(gcloud run services describe cardsense-api --region us-central1 --format='value(status.url)')/health"
+gcloud secrets add-iam-policy-binding plaid-secret \
+  --member="serviceAccount:${CS_RUNTIME_ACCOUNT}@${CS_PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding cardsense-internal \
+  --member="serviceAccount:${CS_RUNTIME_ACCOUNT}@${CS_PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
 ```
 
-## 2. Frontend → Vercel
+If a secret is rotated after deployment, deploy a new Cloud Run revision so its
+environment receives the new `latest` version.
 
-The repo root is not the app, so Vercel needs pointing at it. In the Vercel
-dashboard: **Add New → Project**, import `jovann-sim/card-sense`, then set
-**Root Directory** to `frontend/web`.
+## 4. Deploy the backend
 
-Add one environment variable, for all environments:
-
-```
-CARDSENSE_API_URL = https://cardsense-api-XXXX-uc.a.run.app
-```
-
-Use the URL the `gcloud run deploy` printed. No trailing slash.
-
-Deploy. If you prefer the CLI, from `frontend/web`:
+Run this from `backend/`, where the Dockerfile and `.dockerignore` live:
 
 ```bash
+cd backend
+
+gcloud run deploy "$CS_SERVICE" \
+  --source . \
+  --region "$CS_REGION" \
+  --allow-unauthenticated \
+  --service-account "${CS_RUNTIME_ACCOUNT}@${CS_PROJECT_ID}.iam.gserviceaccount.com" \
+  --set-secrets "PLAID_SECRET=plaid-secret:latest,INTERNAL_RUN_SECRET=cardsense-internal:latest" \
+  --set-env-vars "DEMO_MODE=false,PIPELINE_ENGINE=adk,GOOGLE_CLOUD_PROJECT=${CS_PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,FIRESTORE_DATABASE=${CS_DATABASE},FINANCE_AGENT_MODEL=gemini-2.5-flash,PLAID_CLIENT_ID=6a79aafc2df7e2000d7d2d7c,PLAID_ENV=sandbox" \
+  --memory 1Gi \
+  --timeout 300 \
+  --min-instances 1
+
+cd ..
+```
+
+Why the non-default flags matter:
+
+- `DEMO_MODE=false` selects Firestore. A Cloud Run filesystem is ephemeral, so
+  `.localstore.json` is not a deployment store.
+- `PIPELINE_ENGINE=adk` is explicit even though ADK is currently the default.
+- `--timeout 300` leaves enough time for multi-pass document extraction.
+- `--min-instances 1` avoids a cold start during judging, at additional cost.
+- `--allow-unauthenticated` is required by the current dashboard and extension,
+  but it is also the reason this deployment must contain synthetic data only.
+
+Check the revision and save its origin:
+
+```bash
+CS_BACKEND_ORIGIN="$(gcloud run services describe "$CS_SERVICE" \
+  --region "$CS_REGION" \
+  --format='value(status.url)')"
+
+curl -fsS "$CS_BACKEND_ORIGIN/health"
+```
+
+The container installs only `backend/requirements.txt`; test-only dependencies
+stay in `requirements-dev.txt`. The image includes `app/`, `adk_agents/`,
+`evals/`, and `data/`, which are all required by the runtime and quality page.
+
+## 5. Deploy the frontend
+
+In Vercel, import the current repository:
+
+```text
+hcy-05/CardSenseATA
+```
+
+Set the project Root Directory to:
+
+```text
+frontend/web
+```
+
+Add `CARDSENSE_API_URL` to Production and any Preview environments you intend
+to use:
+
+```text
+CARDSENSE_API_URL=https://cardsense-api-XXXX-uc.a.run.app
+```
+
+Use the exact `CS_BACKEND_ORIGIN` printed by Cloud Run, without a trailing
+slash. Do not enable `CARDSENSE_USE_MOCK_DATA` in Vercel. Environment changes
+apply only to new deployments, so redeploy after adding or changing the value.
+
+Deploy from the Vercel dashboard, or from `frontend/web`:
+
+```bash
+cd frontend/web
 npx vercel --prod
+cd ../..
 ```
 
-## 3. Let the frontend talk to the backend
+The dashboard reads the backend from the Next.js server and sends browser
+mutations through `/api/backend/...`, a same-origin Next.js proxy. It therefore
+does not require the viewer's browser to make cross-origin requests to Cloud
+Run. The backend still admits Vercel preview origins and unpacked
+`chrome-extension://` origins for direct clients.
 
-CORS already admits `https://*.vercel.app`, which covers production and every
-preview. If you attach a custom domain, add it explicitly:
+A custom dashboard domain does not need `CORS_ORIGINS` while the same-origin
+proxy remains in use. Set `CORS_ORIGINS` only if a new browser client will call
+Cloud Run directly.
+
+## 6. Prepare synthetic demo data
+
+The seed routes are protected by `X-Internal-Secret`. Read the secret into a
+shell variable without printing it:
 
 ```bash
-gcloud run services update cardsense-api --region us-central1 --update-env-vars CORS_ORIGINS=https://cardsense.app,https://www.cardsense.app
+CS_INTERNAL_SECRET="$(gcloud secrets versions access latest \
+  --secret=cardsense-internal)"
 ```
 
-## 4. Seed the deployed account
-
-Firestore is shared with your local machine, so the data is already there. If
-you want to reset it to the twelve-month demo set, you need the secret you just
-generated — these endpoints are gated precisely so a stranger cannot call them:
+Seed the descriptive catalogue:
 
 ```bash
-export CS_URL="$(gcloud run services describe cardsense-api --region us-central1 --format='value(status.url)')" && export CS_SECRET="$(gcloud secrets versions access latest --secret=cardsense-internal)"
+curl -fsS -X POST "$CS_BACKEND_ORIGIN/api/v1/catalog/seed" \
+  -H "X-Internal-Secret: $CS_INTERNAL_SECRET"
 ```
+
+`catalog/seed` creates unheld reference cards; it does not create the user's
+wallet. On a fresh Firestore database, add held cards through the Cards page and
+connect/link Plaid Sandbox accounts before expecting attributed reward totals.
+
+Once the wallet exists, this replaces transactions with a deterministic
+twelve-month synthetic household history and runs the pipeline:
 
 ```bash
-curl -X POST "$CS_URL/api/v1/demo/seed-realistic?months=12" -H "x-internal-secret: $CS_SECRET"
+curl -fsS -X POST \
+  "$CS_BACKEND_ORIGIN/api/v1/demo/seed-realistic?months=12" \
+  -H "X-Internal-Secret: $CS_INTERNAL_SECRET"
 ```
+
+For meaningful captured-reward figures, held cards must already have
+`accountId` values. Without linked accounts, the generated transactions remain
+unmapped and the ingestion stage correctly reports degraded attribution. This
+route is a repeatable transaction seed, not a complete fresh-database bootstrap.
+
+Clear the shell copy of the secret when finished:
 
 ```bash
-curl -X POST "$CS_URL/api/v1/catalog/seed" -H "x-internal-secret: $CS_SECRET"
+unset CS_INTERNAL_SECRET
 ```
 
-## 5. Before you show it to anyone
+## 7. Configure the extension
 
-- **Rotate the Plaid secret.** The one in use has been pasted into a chat log.
-  Roll it in the Plaid dashboard and update the Secret Manager version.
-- **The service is deployed unauthenticated**, because the frontend and the
-  extension have no login to present. Reads are open: anyone with the URL can
-  see the demo account's transactions and cards. That is acceptable for seeded
-  demo data and would not be for a real person's. Do not connect a real bank
-  account to the deployed instance.
-- **Check the deadline on any welcome bonus** in the demo data before judging,
-  since the tracker is date-driven and a window that closes will read as missed.
+The extension is not deployed by Vercel:
 
----
+1. Open `chrome://extensions`.
+2. Enable Developer mode.
+3. Choose **Load unpacked** and select `frontend/extension`.
+4. Open the CardSense popup and choose **Backend settings**.
+5. Enter `CS_BACKEND_ORIGIN`.
+6. Accept Chrome's permission request for that backend origin.
 
-## About DEMO_MODE
+No source edit or manifest edit is required. The settings page stores the
+origin in `chrome.storage.sync` and requests only that origin through the
+manifest's optional host permissions.
 
-`DEMO_MODE=true` swaps Firestore for an in-memory store with a local JSON file
-behind it. That is right for a laptop with no Google credentials, and wrong for
-anything deployed: Cloud Run containers are replaced without warning and their
-filesystems go with them, so every restart would silently lose the wallet.
+Smoke-test:
 
-Deploy with `DEMO_MODE=false`. The app refuses to start in real mode without
-working credentials, which is deliberate — a backend that boots and then
-returns empty data is harder to diagnose than one that does not boot.
+- a known merchant, which should produce a card and confidence level;
+- an unknown merchant, which should decline to guess;
+- an unreachable backend, which should show recovery guidance.
 
-## What this does not deploy
+## 8. Plaid sync and webhook status
 
-The browser extension is loaded unpacked from `frontend/extension` and points at
-`http://localhost:8080`. To use it against the deployed backend, change `API` at
-the top of `popup.js` and add that origin to `host_permissions`.
+Plaid Link, token exchange, manual sync, scheduled sync, disconnect, and webhook
+verification are implemented. The webhook endpoint is:
+
+```text
+POST /api/v1/plaid/webhook
+```
+
+When Plaid is configured, the endpoint verifies the `Plaid-Verification` ES256
+JWT, its issued-at age, and the exact request-body SHA-256 hash.
+
+The current `link/token/create` implementation does not pass a `webhook` URL to
+Plaid, and there is no `PLAID_WEBHOOK_URL` setting. A normal deployment
+therefore does not automatically register
+`$CS_BACKEND_ORIGIN/api/v1/plaid/webhook` for new Items. Manual sync and the
+protected scheduler route are the working deployed refresh paths. Do not claim
+automatic webhook refresh in a demo until registration is implemented and
+existing Items are updated.
+
+## 9. Security boundary
+
+Cloud Run is intentionally public. This means more than public reads:
+
+- anyone with the URL can read the fixed `demo-user` snapshot;
+- browser-facing mutations and agent runs are unauthenticated;
+- card, goal, planned-spend, advice, and Plaid state can be changed;
+- model-backed endpoints can create cost if abused;
+- there is no multi-user ownership boundary or rate limiting.
+
+The following operator routes require `X-Internal-Secret`:
+
+- forced agent-quality evaluation;
+- Plaid Sandbox seed;
+- demo reset and realistic transaction seed;
+- catalogue seed;
+- scheduler run;
+- CSV import.
+
+Webhook signature verification protects only the Plaid webhook route. It does
+not authenticate the rest of the API.
+
+Before showing the deployment:
+
+- confirm every transaction and card is synthetic;
+- rotate any secret that may have been exposed, add a new Secret Manager
+  version, and redeploy;
+- verify welcome-bonus dates still tell the intended demo story;
+- run the full dashboard and extension journey twice;
+- do not connect a real bank account.
+
+## 10. Release checks
+
+Before deployment:
+
+```bash
+cd backend
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests -q
+.venv/bin/python -m evals.run_agent_evals
+
+cd ../frontend/extension
+npm test
+
+cd ../web
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+After deployment:
+
+```bash
+curl -fsS "$CS_BACKEND_ORIGIN/health"
+curl -fsS -o /dev/null -w '%{http_code}\n' \
+  "$CS_BACKEND_ORIGIN/api/v1/snapshot"
+```
+
+Then open the Vercel deployment and verify the dashboard, cards, forecast,
+goals, history, activity, write actions, root error boundary, and extension.
