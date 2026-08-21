@@ -22,6 +22,12 @@ const URGENCY_LABEL = {
 
 type Resolution = "done" | "dismissed";
 
+/** How many recommendations show before the list needs a click to see more.
+ *  A card edit can easily produce fifteen or twenty of these — mostly
+ *  eligibility checks — and scrolling past all of them to reach the
+ *  dashboard's other sections is the wrong default for a first look. */
+const COLLAPSED_COUNT = 3;
+
 export function Recommendations({
   items,
   now,
@@ -33,7 +39,11 @@ export function Recommendations({
   const [resolved, setResolved] = useState<Record<string, Resolution>>({});
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState(false);
   const router = useRouter();
+
+  const hidden = items.length - COLLAPSED_COUNT;
+  const visible = expanded ? items : items.slice(0, COLLAPSED_COUNT);
 
   async function resolve(id: string, outcome: "open" | "acted" | "dismissed") {
     const previous = resolved[id];
@@ -68,7 +78,7 @@ export function Recommendations({
 
   return (
     <div>
-      {items.map((rec) => {
+      {visible.map((rec) => {
         const state = resolved[rec.id];
 
         // A resolved recommendation collapses rather than disappearing — the
@@ -181,6 +191,18 @@ export function Recommendations({
           </article>
         );
       })}
+
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="rec__more"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded
+            ? "Show fewer"
+            : `Show ${hidden} more recommendation${hidden === 1 ? "" : "s"}`}
+        </button>
+      )}
     </div>
   );
 }
