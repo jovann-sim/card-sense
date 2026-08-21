@@ -13,7 +13,7 @@ from .agents.runtime import GeminiRuntime
 from .agents.strategy import StrategyAgent, VALUATIONS
 from .valuations import DEFAULT_UNIT_VALUES
 from .models import Snapshot
-from .simulation import plan as build_plan
+from .simulation import optimal_value, plan as build_plan
 from .welcome import qualify_catalog, rescue, track_held
 
 
@@ -445,7 +445,7 @@ class Orchestrator:
             strategy.get("routable", []), welcome_held,
             service_id=strategy.get("routingService"),
         )
-        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [self._track_valuation(name, value, captured) for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "routable": strategy.get("routable", []), "welcome": welcome_held, "welcomeCandidates": welcome_candidates, "plan": simulation, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
+        data = {"readModelVersion": READ_MODEL_VERSION, "generatedAt": now, "period": self._period(transactions), "totals": totals, "agents": agents, "recommendations": [self._recommendation(item) for item in advice if item.get("outcome") == "open" and item.get("runId") == run_id], "categories": strategy["categories"], "cards": cards, "tracks": [self._track_valuation(name, value, captured, transactions, wallet, rules, catalog_rows) for name, value in VALUATIONS.items()], "trackPreference": preferred, "recommendedTrack": track, "trackRationale": "Optimised against your stated goal." if preferred else "Cash back is the stated nominal-value baseline.", "forecast": forecast, "goal": goal, "planned": planned, "trackRecord": record, "wallet": wallet, "catalog": project_catalog(self.store, uid, wallet), "activity": activity, "routable": strategy.get("routable", []), "welcome": welcome_held, "welcomeCandidates": welcome_candidates, "plan": simulation, "collections": [{"collection": "transactions", "writtenBy": "ingestion", "readBy": ["forecast", "strategy"]}, {"collection": "card_rules", "writtenBy": "card-intelligence", "readBy": ["forecast", "strategy"]}, {"collection": "forecasts", "writtenBy": "forecast", "readBy": ["advisory"]}, {"collection": "strategy_runs", "writtenBy": "strategy", "readBy": ["forecast", "advisory"]}, {"collection": "advice", "writtenBy": "advisory", "readBy": []}]}
         return Snapshot.model_validate(data).model_dump(mode="json")
 
     @staticmethod
@@ -575,27 +575,80 @@ class Orchestrator:
         candidates.sort(key=lambda row: (not row["qualifies"], -row["valueUsd"]))
         return held, candidates
 
-    def _track_valuation(self, name: str, value: float, captured: float) -> dict:
-        """One reward track's nominal value, with the honest note behind it.
+    def _track_valuation(
+        self, name: str, value: float, captured: float,
+        transactions, wallet, rules, catalog_rows,
+    ) -> dict:
+        """What this spending would earn if optimised entirely within one track.
 
-        The rate for every track came with its own reasoning already attached
-        in valuations.py — including, for miles and points, an explicit
-        "Placeholder... Confirm" — and none of it used to leave this function:
-        every track was given the same generic "X nominal value assumption"
-        string regardless of whether the underlying number was sourced or
-        guessed. isPlaceholder lets the interface flag the guessed ones
-        distinctly rather than relying on a reader to notice the word inside
-        a sentence of prose.
+        Used to just relabel the same captured dollar figure three times —
+        rawUnits = captured/value and nominal = rawUnits*value is a tautology,
+        so cashback, miles and points always showed the identical number
+        despite claiming to compare them. There was nothing to compare.
+
+        This re-runs the optimiser against every card in that reward family —
+        held or not, using the same counterfactual the "cards you don't hold"
+        table already relies on — so the three figures are now genuinely
+        different: what cashback alone could have earned you, versus miles
+        alone, versus points alone, each priced through that card's own real
+        programme valuation rather than a generic per-unit guess.
         """
-        note = DEFAULT_UNIT_VALUES.get(name, (value, f"{name.title()} nominal value assumption."))[1]
+        candidates, track_rules = [], {}
+        held_names = set()
+        for card in wallet:
+            if card.get("track") != name or card.get("parseStatus") != "parsed":
+                continue
+            candidates.append(card)
+            track_rules[card["cardId"]] = rules.get(card["cardId"], [])
+            held_names.add(card.get("name"))
+
+        for entry in catalog_rows:
+            if entry.get("track") != name or entry.get("name") in held_names or not entry.get("rules"):
+                continue
+            hypothetical_id = f"catalog::{entry['id']}"
+            candidates.append({
+                "cardId": hypothetical_id,
+                "name": entry["name"],
+                "last4": "0000",
+                "network": entry.get("network", "Unknown"),
+                "track": name,
+                "parseStatus": "parsed",
+            })
+            track_rules[hypothetical_id] = entry["rules"]
+
+        if not candidates:
+            # No card in this family, held or catalogued, exists to optimise
+            # against — the generic per-unit assumption is the only honest
+            # answer left, so it is kept exactly as before, placeholder flag
+            # and all.
+            note = DEFAULT_UNIT_VALUES.get(name, (value, f"{name.title()} nominal value assumption."))[1]
+            return {
+                "track": name,
+                "rawUnits": round(captured / value, 2) if value else 0,
+                "unitLabel": "dollars" if name == "cashback" else name,
+                "rate": value,
+                "nominal": captured,
+                "source": note,
+                "isPlaceholder": "placeholder" in note.lower(),
+            }
+
+        nominal = optimal_value(self.strategy, transactions, candidates, track_rules)
         return {
             "track": name,
-            "rawUnits": round(captured / value, 2) if value else 0,
+            # A mixed set of cards can span several real programmes at
+            # different rates, so this raw count is illustrative — roughly how
+            # many units that would be at the typical rate — while nominal is
+            # the real dollar figure the optimiser actually computed.
+            "rawUnits": round(nominal / value, 2) if value else 0,
             "unitLabel": "dollars" if name == "cashback" else name,
             "rate": value,
-            "nominal": captured,
-            "source": note,
-            "isPlaceholder": "placeholder" in note.lower(),
+            "nominal": nominal,
+            "source": (
+                f"Best achievable across {len(candidates)} {name} card"
+                f"{'s' if len(candidates) != 1 else ''} you hold or could add, "
+                "priced through each card's own real programme rate."
+            ),
+            "isPlaceholder": False,
         }
 
     def _period(self, transactions) -> dict:
