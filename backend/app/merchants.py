@@ -57,6 +57,8 @@ DOMAIN_MCC: dict[str, tuple[str, str]] = {
     "aa": ("4511", "Air travel"),
     "southwest": ("4511", "Air travel"),
     "jetblue": ("4511", "Air travel"),
+    "singaporeair": ("4511", "Air travel"),
+    "flyscoot": ("4511", "Air travel"),
     "kayak": ("4722", "Travel"),
     "hertz": ("7512", "Car rental"),
     "enterprise": ("7512", "Car rental"),

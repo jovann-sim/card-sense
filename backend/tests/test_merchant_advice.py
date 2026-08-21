@@ -187,3 +187,13 @@ def test_demo_mode_still_boots_without_ceremony():
     from app.config import Settings
 
     assert Settings(demo_mode=True).real_mode_errors() == []
+
+
+def test_singapore_airlines_and_scoot_resolve_to_air_travel():
+    """A held card can name "Flights (Singapore Airlines & Scoot)" as a rule;
+    the merchant table has to recognise both, or that rule can never fire.
+    """
+    for domain in ("https://www.singaporeair.com", "https://www.flyscoot.com"):
+        result = resolve(domain)
+        assert result["mcc"] == "4511"
+        assert result["confidence"] == "high"
