@@ -491,7 +491,12 @@ def test_disconnect_requires_credentials_before_deleting_local_token(monkeypatch
     assert test_store.get_subdoc(main.UID, "plaid_items", "item") is not None
 
 
-def test_demo_reset_requires_secret_and_preserves_catalog_and_global_rules(monkeypatch):
+def test_demo_reset_requires_secret_and_preserves_catalog_and_wallet(monkeypatch):
+    """A judge testing "connect Plaid" needs the dashboard to read as
+    genuinely disconnected first. Reset wipes transactions and Plaid
+    connections but keeps wallet cards and their already-extracted terms,
+    so the next test does not also cost a fresh Gemini read of every card.
+    """
     from app import main
 
     test_store = Store()
@@ -505,6 +510,10 @@ def test_demo_reset_requires_secret_and_preserves_catalog_and_global_rules(monke
     test_store.set_subdoc(main.UID, "wallet", "held", {
         "cardId": "held", "name": "Held", "last4": "1111", "network": "Visa",
         "track": "cashback", "annualFee": 0, "parseStatus": "parsed",
+        # A stale accountId, left over from before the reset, must not survive
+        # it — link_accounts_to_cards skips any card that already has one, so
+        # a leftover id would silently block re-linking after the next connect.
+        "accountId": "acct-from-before-the-reset",
     })
     test_store.set_subdoc(main.UID, "transactions", "spend", {
         "source": "csv", "amount": 100, "date": str(date.today()),
@@ -513,7 +522,11 @@ def test_demo_reset_requires_secret_and_preserves_catalog_and_global_rules(monke
     test_store.set_user(main.UID, {"goal": {"track": "cashback"}})
     monkeypatch.setattr(main, "store", test_store)
     monkeypatch.setattr(main, "orch", test_orchestrator)
-    monkeypatch.setattr(main.settings, "demo_mode", True)
+    # DEMO_MODE=false, real Firestore, is exactly the state the deployed
+    # instance runs in — the bug this test exists for was that reset refused
+    # to run there at all, mistaking "which store backs the app" for
+    # "is this account safe to wipe".
+    monkeypatch.setattr(main.settings, "demo_mode", False)
     monkeypatch.setattr(main.settings, "plaid_env", "sandbox")
     monkeypatch.setattr(main.settings, "plaid_client_id", None)
     monkeypatch.setattr(main.settings, "plaid_secret", None)
@@ -523,11 +536,11 @@ def test_demo_reset_requires_secret_and_preserves_catalog_and_global_rules(monke
         main.reset_demo("wrong")
     assert unauthorized.value.status_code == 401
 
-    monkeypatch.setattr(main.settings, "demo_mode", False)
+    monkeypatch.setattr(main.settings, "plaid_env", "production")
     with pytest.raises(HTTPException) as forbidden:
         main.reset_demo("reset-secret")
     assert forbidden.value.status_code == 403
-    monkeypatch.setattr(main.settings, "demo_mode", True)
+    monkeypatch.setattr(main.settings, "plaid_env", "sandbox")
 
     result = main.reset_demo("reset-secret")
 
@@ -536,8 +549,11 @@ def test_demo_reset_requires_secret_and_preserves_catalog_and_global_rules(monke
     totals = result["snapshot"]["totals"]
     assert set(totals) >= {"spend", "refunds", "netSpend", "captured", "unclaimed"}
     assert all(value == 0 for value in totals.values()), totals
-    assert result["snapshot"]["wallet"] == []
     assert test_store.get_subcollection(main.UID, "transactions") == []
     assert test_store.get_user(main.UID).get("goal") is None
     assert len(test_store.get_subcollection(main.UID, "catalog")) == 1
     assert test_store.get_global_doc("card_rules", "catalog-card") is not None
+
+    wallet = result["snapshot"]["wallet"]
+    assert len(wallet) == 1 and wallet[0]["name"] == "Held"
+    assert wallet[0].get("accountId") is None

@@ -1160,10 +1160,24 @@ def disconnect_plaid_item(item_id: str):
 
 @app.post("/api/v1/demo/reset")
 def reset_demo(x_internal_secret: str | None = Header(default=None)):
-    """Return the single-user sandbox demo to a fresh zero-value snapshot."""
+    """Return the single-user sandbox demo to a fresh, disconnected state.
+
+    Wipes transactions and every Plaid connection so the dashboard reads as
+    genuinely disconnected — the empty state that only clears once someone
+    completes Plaid Link again. Wallet cards and their already-extracted terms
+    survive, so a reset does not also cost a fresh Gemini read of every card's
+    terms before the next test can run.
+
+    Guarded on Plaid Sandbox rather than DEMO_MODE: DEMO_MODE only chooses
+    which store backs the app (local file versus Firestore), which has nothing
+    to do with whether this account is safe to wipe. A deployed instance
+    genuinely running DEMO_MODE=false against real Firestore, but still
+    pointed at Plaid Sandbox with the fixed demo-user, is exactly the case
+    this exists for.
+    """
     _require_internal(x_internal_secret)
-    if not settings.demo_mode or settings.plaid_env.lower() != "sandbox":
-        raise HTTPException(403, "Demo reset is available only in DEMO_MODE with Plaid Sandbox")
+    if settings.plaid_env.lower() != "sandbox":
+        raise HTTPException(403, "Demo reset is available only against Plaid Sandbox")
 
     items = store.get_subcollection(UID, "plaid_items")
     removed_items, disconnect_errors = 0, []
@@ -1181,7 +1195,15 @@ def reset_demo(x_internal_secret: str | None = Header(default=None)):
 
     # Reset must remain useful if Sandbox is unavailable. Remote errors are
     # returned visibly, while all local user state is still cleared.
-    store.clear_user(UID, preserve_collections={"catalog"})
+    store.clear_user(UID, preserve_collections={"catalog", "wallet"})
+    # A preserved card keeps its old accountId, which now points at a Plaid
+    # account that was just deleted — and link_accounts_to_cards skips any
+    # card that already has one set, so a stale id would silently block
+    # re-linking after the next Plaid Link connection rather than just being
+    # wrong. Clearing it is what makes the auto-link on reconnect work again.
+    for card in store.get_wallet(UID):
+        if card.get("accountId"):
+            store.set_subdoc(UID, "wallet", card["cardId"], {"accountId": None})
     active_orchestrator = orch if orch.store is store else Orchestrator(store)
     snapshot = active_orchestrator.empty_snapshot(UID)
     store.set_snapshot(UID, snapshot)
