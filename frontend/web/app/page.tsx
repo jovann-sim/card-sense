@@ -145,82 +145,83 @@ export default async function SpendingAnalytics() {
         )}
       </section>
 
-      <div className="shell">
-        <ExcludedStrip totals={totals} />
+      {hasConnectedData && (
+        <div className="shell">
+          <ExcludedStrip totals={totals} />
 
-        <TrackRecordStrip record={snapshot.trackRecord} />
+          <TrackRecordStrip record={snapshot.trackRecord} />
 
-        <StrategyPlan plan={snapshot.plan ?? {}} />
+          <StrategyPlan plan={snapshot.plan ?? {}} />
 
-        <WelcomeBonuses
-          welcome={snapshot.welcome ?? []}
-          candidates={snapshot.welcomeCandidates ?? []}
-        />
+          <WelcomeBonuses
+            welcome={snapshot.welcome ?? []}
+            candidates={snapshot.welcomeCandidates ?? []}
+          />
 
-        <section className="section split">
-          <div>
-            <h2 className="section__label">What to do next</h2>
-            {snapshot.recommendations.length > 0 ? (
-              <Recommendations
-                items={snapshot.recommendations}
-                now={generatedAt}
-              />
-            ) : (
-              <p className="empty-state">{emptyRecommendation}</p>
-            )}
-          </div>
+          <section className="section split">
+            <div>
+              <h2 className="section__label">What to do next</h2>
+              {snapshot.recommendations.length > 0 ? (
+                <Recommendations
+                  items={snapshot.recommendations}
+                  now={generatedAt}
+                />
+              ) : (
+                <p className="empty-state">{emptyRecommendation}</p>
+              )}
+            </div>
 
-          <div>
-            <h2 className="section__label">
-              {allCaptured ? "Where rewards landed" : "Where it’s leaking"}
-            </h2>
-            <p className="section__note" style={{ marginBottom: "1.75rem" }}>
-              {allCaptured
-                ? "No verified category leaked rewards. Bars show what each category returned."
-                : "Bar length is the total reward each category could return; the hatched part is what went to the wrong card. Ordered by what was missed, not by what was spent."}
-            </p>
-            {snapshot.categories.length > 0 ? (
-              <LeakList categories={snapshot.categories} />
-            ) : (
-              <p className="empty-state">
-                {hasConnectedData
-                  ? "No analysed reward categories are available yet."
-                  : "Categories will appear after transaction data is connected and analysed."}
+            <div>
+              <h2 className="section__label">
+                {allCaptured ? "Where rewards landed" : "Where it’s leaking"}
+              </h2>
+              <p className="section__note" style={{ marginBottom: "1.75rem" }}>
+                {allCaptured
+                  ? "No verified category leaked rewards. Bars show what each category returned."
+                  : "Bar length is the total reward each category could return; the hatched part is what went to the wrong card. Ordered by what was missed, not by what was spent."}
               </p>
-            )}
-          </div>
-        </section>
+              {snapshot.categories.length > 0 ? (
+                <LeakList categories={snapshot.categories} />
+              ) : (
+                <p className="empty-state">
+                  No analysed reward categories are available yet.
+                </p>
+              )}
+            </div>
+          </section>
 
-        <BillRouting routable={snapshot.routable ?? []} />
+          <BillRouting routable={snapshot.routable ?? []} />
 
-        <section className="section">
-          <h2 className="section__label">Cards &amp; caps</h2>
-          <p className="section__note">
-            A card stops being the best choice the moment it hits its cap. These
-            are the limits currently shaping every recommendation above.
-          </p>
-          <div style={{ marginTop: "1.5rem" }}>
-            <CardCaps cards={snapshot.cards} />
-          </div>
-        </section>
+          <section className="section">
+            <h2 className="section__label">Cards &amp; caps</h2>
+            <p className="section__note">
+              A card stops being the best choice the moment it hits its cap.
+              These are the limits currently shaping every recommendation
+              above.
+            </p>
+            <div style={{ marginTop: "1.5rem" }}>
+              <CardCaps cards={snapshot.cards} />
+            </div>
+          </section>
 
-        <section className="section">
-          <h2 className="section__label">Reward track</h2>
-          <p className="section__note">
-            Points, cash back, and miles are not comparable until they are all
-            priced in dollars. Below is this quarter&rsquo;s balance in each,
-            converted at the rates stated on each card.
-          </p>
-          <div style={{ marginTop: "1.5rem" }}>
-            <TrackPanel
-              tracks={snapshot.tracks}
-              recommended={snapshot.recommendedTrack}
-              rationale={snapshot.trackRationale}
-              hasPreference={snapshot.trackPreference !== null}
-            />
-          </div>
-        </section>
-      </div>
+          <section className="section">
+            <h2 className="section__label">Reward track</h2>
+            <p className="section__note">
+              Points, cash back, and miles are not comparable until they are
+              all priced in dollars. Below is this quarter&rsquo;s balance in
+              each, converted at the rates stated on each card.
+            </p>
+            <div style={{ marginTop: "1.5rem" }}>
+              <TrackPanel
+                tracks={snapshot.tracks}
+                recommended={snapshot.recommendedTrack}
+                rationale={snapshot.trackRationale}
+                hasPreference={snapshot.trackPreference !== null}
+              />
+            </div>
+          </section>
+        </div>
+      )}
 
       <ConnectFlow agents={snapshot.agents} wallet={snapshot.wallet} />
     </main>
